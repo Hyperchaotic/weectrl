@@ -3,3 +3,8 @@
 
 
 A library and application for controlling Belkin WeMo switches and Sockets.
+
+![Linux](http://i.imgur.com/26aRUfE.png "Linux") ![Windows](http://i.imgur.com/PoNrogW.png "Linux")
+
+
+
