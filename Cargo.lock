@@ -176,12 +176,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "conrod"
 version = "0.50.0"
-source = "git+https://github.com/PistonDevelopers/conrod.git#16bed72e0593ee94e810a9289709d8b0686693d2"
+source = "git+https://github.com/PistonDevelopers/conrod.git#f5f5febc2a6de9ea112cc3d0e17c1e86e884ed31"
 dependencies = [
  "daggy 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "glium 0.16.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "num 0.1.36 (registry+https://github.com/rust-lang/crates.io-index)",
- "pistoncore-input 0.17.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "pistoncore-input 0.17.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rusttype 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "winit 0.5.10 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -808,7 +808,7 @@ dependencies = [
 
 [[package]]
 name = "pistoncore-input"
-version = "0.17.0"
+version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "bitflags 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1427,7 +1427,7 @@ dependencies = [
 "checksum phf_shared 0.7.21 (registry+https://github.com/rust-lang/crates.io-index)" = "07e24b0ca9643bdecd0632f2b3da6b1b89bbb0030e0b992afc1113b23a7bc2f2"
 "checksum piston-float 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "b058c3a640efd4bcf63266512e4bb03187192c1b29edd38b16d5a014613e3199"
 "checksum piston-viewport 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "9c5548a838fd9dc604c96d886c03c303f043a2d85f88719cca59dc7991d86343"
-"checksum pistoncore-input 0.17.0 (registry+https://github.com/rust-lang/crates.io-index)" = "6220f05c9339e6b82c7cd5d1b30f064cc06e6503933c15c3422aa8f70c693608"
+"checksum pistoncore-input 0.17.1 (registry+https://github.com/rust-lang/crates.io-index)" = "0cc4654fdf7987f621edc31f21f907aa5bec66376af1a218f63ba62e83febf25"
 "checksum pkg-config 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)" = "3a8b4c6b8165cd1a1cd4b9b120978131389f64bdaf456435caa41e630edba903"
 "checksum png 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)" = "3cb773e9a557edb568ce9935cf783e3cdcabe06a9449d41b3e5506d88e582c82"
 "checksum quote 0.3.12 (registry+https://github.com/rust-lang/crates.io-index)" = "e7b44fd83db28b83c1c58187159934906e5e955c812e211df413b76b03c909a5"

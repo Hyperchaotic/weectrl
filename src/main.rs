@@ -32,8 +32,8 @@ use conrod::backend::glium::glium::{DisplayBuild, Surface};
 
 use conrod::{Borderable, color};
 
-use std::sync::{Arc, Mutex, Condvar};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+
 use std::thread;
 use std::sync::mpsc;
 
@@ -71,11 +71,18 @@ const APP_INFO: AppInfo = AppInfo {
     author: "hyperchaotic",
 };
 
-fn start_discovery_async(event_loop: Arc<EventLoop>,
-                         ctrl: Arc<Mutex<WeeController>>)
-                         -> mpsc::Receiver<DeviceInfo> {
+#[derive(Debug)]
+enum Message {
+    Event(conrod::event::Input),
+    DiscoveryItem(DeviceInfo),
+    DiscoveryEnded,
+    NotificationsStarted,
+    Notification(StateNotification),
+}
 
-    let (discovery, discoveries) = mpsc::sync_channel(1);
+fn start_discovery_async(tx: mpsc::Sender<Message>,
+                         ctrl: Arc<Mutex<WeeController>>) {
+
     thread::spawn(move || {
         info!("Discovery Thread: Start discovery");
         let rx: mpsc::Receiver<DeviceInfo> =
@@ -83,44 +90,38 @@ fn start_discovery_async(event_loop: Arc<EventLoop>,
         loop {
             if let Some(d) = rx.recv().ok() {
                 info!(" >>>>>>>>>>>>>> Got device {:?}", d.unique_id);
-                let _ = discovery.send(d);
-                event_loop.needs_update();
+                let _ = tx.send(Message::DiscoveryItem(d));
                 info!(" <<<<<<<<<<<<<<< ");
             } else {
                 break;
             }
         }
-        event_loop.needs_update();
+        let _ = tx.send(Message::DiscoveryEnded);
         info!("Discovery Thread: Ended.");
     });
-
-    discoveries
 }
 
-fn start_notification_listener(event_loop: Arc<EventLoop>,
-                               ctrl: Arc<Mutex<WeeController>>)
-                               -> mpsc::Receiver<StateNotification> {
+fn start_notification_listener(tx: mpsc::Sender<Message>,
+                               ctrl: Arc<Mutex<WeeController>>) {
 
-    let (notify, notifications) = mpsc::sync_channel(1);
     thread::spawn(move || {
         let rx: Option<mpsc::Receiver<StateNotification>>;
         {
             let mut controller = ctrl.lock().unwrap();
             rx = controller.start_subscription_service().ok();
         }
+        let _ = tx.send(Message::NotificationsStarted);
         if let Some(rx) = rx {
             loop {
                 match rx.recv() {
                     Ok(o) => {
-                        let _ = notify.send(o);
-                        event_loop.needs_update();
+                        let _ = tx.send(Message::Notification(o));
                     }
-                    Err(_) => (),
+                    Err(_) => break,
                 };
             }
         }
     });
-    notifications
 }
 
 fn main() {
@@ -142,16 +143,8 @@ fn main() {
     info!("Starting up");
 
     // Include resources in binary to avoid problems with missing files
-    let font_bytes = include_bytes!("../assets/fonts/NotoSans/NotoSans-Regular.ttf");
     let refresh_image_bytes = include_bytes!("../assets/images/refresh.png");
     let clear_image_bytes = include_bytes!("../assets/images/clear.png");
-
-    let mut notification_diag = NotificationDialog {
-        is_open: false,
-        message: String::new(),
-    };
-    // Initial state
-    let mut app_state = AppState::Initializing;
 
     // Build the window.
     let display = glium::glutin::WindowBuilder::new()
@@ -161,102 +154,168 @@ fn main() {
         .build_glium()
         .unwrap();
 
-    // Construct our `Ui`.
-    let mut ui = conrod::UiBuilder::new([WINDOW_WIDTH as f64, WINDOW_HEIGHT as f64]).build();
-    let mut renderer = conrod::backend::glium::Renderer::new(&display).unwrap();
-
-    // Unique identifier for each widget.
-    let ids = Ids::new(ui.widget_id_generator());
-
-    use conrod::text::FontCollection;
-    let font = FontCollection::from_bytes(&font_bytes[0..font_bytes.len()]).into_font().unwrap();
-    ui.fonts.insert(font);
-
     let mut image_map = conrod::image::Map::new();
     let refresh_image = image_map.insert(load_image(refresh_image_bytes, &display));
     let clear_image = image_map.insert(load_image(clear_image_bytes, &display));
 
-    let mut list: Vec<(DeviceInfo, bool)> = Vec::new();
-    let mut weecontrol = Arc::new(Mutex::new(WeeController::new(Some(logger))));
+    // Construct our `Ui`.
+    let mut renderer = conrod::backend::glium::Renderer::new(&display).unwrap();
 
-    // Poll events from the window.
-    let event_loop = Arc::new(EventLoop::new());
+    // A channel to send events from the main `winit` thread to the conrod thread.
+    let (event_tx, event_rx): (std::sync::mpsc::Sender<Message>, std::sync::mpsc::Receiver<Message>) = std::sync::mpsc::channel();
+    // A channel to send `render::Primitive`s from the conrod thread to the `winit thread.
+    let (render_tx, render_rx) = std::sync::mpsc::channel();
+    // This window proxy will allow conrod to wake up the `winit::Window` for rendering.
+    let window_proxy = display.get_window().unwrap().create_window_proxy();
 
-    // Notification listener, runs perpetually.
-    let notification = start_notification_listener(event_loop.clone(), weecontrol.clone());
-    let mut discovery: Option<mpsc::Receiver<DeviceInfo>> = None;
+    // A function that runs the conrod loop.
+    fn run_conrod(logger: slog::Logger,
+                  refresh_image: conrod::image::Id,
+                  clear_image: conrod::image::Id,
+                  event_emit: std::sync::mpsc::Sender<Message>,
+                  event_rx: std::sync::mpsc::Receiver<Message>,
+                  render_tx: std::sync::mpsc::Sender<conrod::render::OwnedPrimitives>,
+                  window_proxy: glium::glutin::WindowProxy) {
 
-    event_loop.needs_update();
-    'main: loop {
+        // Initial state
+        let mut app_state = AppState::Initializing;
 
-        if let Some(notification) = notification.try_recv().ok() {
-            update_list(&mut list, &notification);
-            event_loop.needs_update();
-        }
+        let mut notification_diag = NotificationDialog { is_open: false, message: String::new()};
 
-        if app_state == AppState::StartDiscovery {
-            list.clear();
-            app_state = AppState::Discovering;
-            discovery = Some(start_discovery_async(event_loop.clone(), weecontrol.clone()));
-        }
+        let mut ui = conrod::UiBuilder::new([WINDOW_WIDTH as f64, WINDOW_HEIGHT as f64]).build();
 
-        if app_state == AppState::Discovering {
-            if let Some(ref rx) = discovery {
-                match rx.try_recv() {
-                    Ok(dev) => {
-                        info!("UI Got device {:?}", dev.unique_id);
-                        let dev_state: bool = if dev.state == State::On { true } else { false };
-                        {
-                            let mut controller = weecontrol.lock().unwrap();
-                            let _ =
-                                controller.subscribe(&dev.unique_id, SUBSCRIPTION_DURATION, true);
-                        }
-                        list.push((dev, dev_state));
-                    }
-                    Err(mpsc::TryRecvError::Empty) => (),
-                    Err(_) => {
+        // Unique identifier for each widget.
+        let ids = Ids::new(ui.widget_id_generator());
+
+        use conrod::text::FontCollection;
+        let font_bytes = include_bytes!("../assets/fonts/NotoSans/NotoSans-Regular.ttf");
+        let font =
+            FontCollection::from_bytes(&font_bytes[0..font_bytes.len()]).into_font().unwrap();
+        ui.fonts.insert(font);
+
+        let mut list: Vec<(DeviceInfo, bool)> = Vec::new();
+        let mut weecontrol = Arc::new(Mutex::new(WeeController::new(Some(logger))));
+        start_notification_listener(event_emit.clone(), weecontrol.clone());
+        // Many widgets require another frame to finish drawing after clicks or hovers, so we
+        // insert an update into the conrod loop using this `bool` after each event.
+        let mut needs_update = true;
+        'conrod: loop {
+
+            if app_state == AppState::StartDiscovery {
+                list.clear();
+                app_state = AppState::Discovering;
+                start_discovery_async(event_emit.clone(), weecontrol.clone());
+            }
+
+            // Collect any pending events.
+            let mut events = Vec::new();
+            while let Ok(event) = event_rx.try_recv() {
+                events.push(event);
+            }
+
+            // If there are no events pending, wait for them.
+            if events.is_empty() || !needs_update {
+                match event_rx.recv() {
+                    Ok(event) => events.push(event),
+                    Err(_) => break 'conrod,
+                };
+            }
+
+            needs_update = false;
+
+            // Input each event into the `Ui`.
+            for event in events {
+                match event {
+                    Message::Event(e) => {
+                        ui.handle_event(e);
+                    },
+                    Message::DiscoveryEnded => {
                         if list.is_empty() {
                             app_state = AppState::NoDevices;
                         } else {
                             app_state = AppState::Ready;
                         }
-                    }
-                };
-            } else {
-                if list.is_empty() {
-                    app_state = AppState::NoDevices;
-                } else {
-                    app_state = AppState::Ready;
+                    },
+                    Message::DiscoveryItem(i) => {
+                        info!("UI Got device {:?}", i.unique_id);
+                        let i_state: bool = if i.state == State::On { true } else { false };
+                        {
+                            let mut controller = weecontrol.lock().unwrap();
+                            let _ = controller.subscribe(&i.unique_id, SUBSCRIPTION_DURATION, true);
+                        }
+                        list.push((i, i_state));
+                    },
+                    Message::NotificationsStarted => (),
+                    Message::Notification(n) => update_list(&mut list, &n),
                 }
+                needs_update = true;
             }
-            event_loop.needs_update();
+
+            set_ui(ui.set_widgets(),
+                   &mut list,
+                   &ids,
+                   &mut app_state,
+                   &mut weecontrol,
+                   &mut notification_diag,
+                   refresh_image,
+                   clear_image);
+
+            // Render the `Ui` to a list of primitives that we can send to the main thread for
+            // display.
+            if let Some(primitives) = ui.draw_if_changed() {
+                if render_tx.send(primitives.owned()).is_err() {
+                    break 'conrod;
+                }
+                // Wakeup `winit` for rendering.
+                window_proxy.wakeup_event_loop();
+            }
+        }
+        let mut controller = weecontrol.lock().unwrap();
+        controller.unsubscribe_all();
+        controller.clear(false);
+    } // fn run_conrod
+
+    // Spawn the conrod loop on its own thread.
+    let log_clone = logger.clone();
+    let event_emitter = event_tx.clone();
+    std::thread::spawn(move || {
+        run_conrod(log_clone, refresh_image,
+                   clear_image,
+                   event_emitter,
+                   event_rx,
+                   render_tx,
+                   window_proxy)
+    });
+
+    // Run the `winit` loop.
+    let mut last_update = std::time::Instant::now();
+    'main: loop {
+
+        // We don't want to loop any faster than 60 FPS, so wait until it has been at least
+        // 16ms since the last yield.
+        let sixteen_ms = std::time::Duration::from_millis(16);
+        let now = std::time::Instant::now();
+        let duration_since_last_update = now.duration_since(last_update);
+        if duration_since_last_update < sixteen_ms {
+            std::thread::sleep(sixteen_ms - duration_since_last_update);
         }
 
-        set_ui(ui.set_widgets(),
-               &mut list,
-               &ids,
-               &mut app_state,
-               &mut weecontrol,
-               &mut notification_diag,
-               refresh_image,
-               clear_image);
+        // Collect all pending events.
+        let mut events: Vec<_> = display.poll_events().collect();
 
-        // Render the `Ui` and then display it on the screen.
-        if let Some(primitives) = ui.draw_if_changed() {
-            renderer.fill(&display, primitives, &image_map);
-            let mut target = display.draw();
-            target.clear_color(0.0, 0.0, 0.0, 1.0);
-            renderer.draw(&display, &mut target, &image_map).unwrap();
-            target.finish().unwrap();
+        // If there are no events, wait for the next event.
+        if events.is_empty() {
+            events.extend(display.wait_events().next());
         }
 
+        // Send any relevant events to the conrod thread.
+        for event in events {
 
-        for event in event_loop.next(&display) {
             // Use the `winit` backend feature to convert the winit event to a conrod one.
             if let Some(event) = conrod::backend::winit::convert(event.clone(), &display) {
-                ui.handle_event(event);
-                event_loop.needs_update();
+                event_tx.send(Message::Event(event)).unwrap();
             }
+
             match event {
                 // Break from the loop upon `Escape`.
                 glium::glutin::Event::KeyboardInput(_, _,
@@ -266,10 +325,22 @@ fn main() {
                 _ => {}
             }
         }
-    }
 
-    let mut controller = weecontrol.lock().unwrap();
-    controller.unsubscribe_all();
+        // Draw the most recently received `conrod::render::Primitives` sent from the `Ui`.
+        if let Ok(mut primitives) = render_rx.try_recv() {
+            while let Ok(newest) = render_rx.try_recv() {
+                primitives = newest;
+            }
+
+            renderer.fill(&display, primitives.walk(), &image_map);
+            let mut target = display.draw();
+            target.clear_color(0.0, 0.0, 0.0, 1.0);
+            renderer.draw(&display, &mut target, &image_map).unwrap();
+            target.finish().unwrap();
+        }
+
+        last_update = std::time::Instant::now();
+    }
 }
 
 // Declare the `WidgetId`s and instantiate the widgets.
@@ -330,7 +401,7 @@ fn set_ui(ref mut ui: conrod::UiCell,
         }
     }
 
-    if *app_state==AppState::Ready || (*app_state==AppState::Discovering && !list.is_empty()) {
+    if *app_state == AppState::Ready || (*app_state == AppState::Discovering && !list.is_empty()) {
         let (mut items, scrollbar) = widget::List::new(list.len(), ITEM_HEIGHT)
             .scrollbar_on_top()
             .scrollbar_color(conrod::color::BLUE)
@@ -402,7 +473,7 @@ fn set_ui(ref mut ui: conrod::UiCell,
                 notification_diag.is_open = false;
             }
         }
-        if *app_state==AppState::Discovering {
+        if *app_state == AppState::Discovering {
             widget::Text::new("Searching...")
                 .color(color::YELLOW)
                 .w_h(180.0, 20.0)
@@ -413,7 +484,7 @@ fn set_ui(ref mut ui: conrod::UiCell,
     } else {
         match *app_state {
             AppState::Ready => (),
-            AppState::StartDiscovery => {},
+            AppState::StartDiscovery => {}
             AppState::Initializing => {
                 widget::Text::new("Scanning for devices...")
                     .color(color::LIGHT_YELLOW)
@@ -467,48 +538,6 @@ fn load_image(image_bytes: &[u8], display: &glium::Display) -> glium::texture::T
         return texture;
     }
     glium::texture::Texture2d::empty(display, 0, 0).unwrap()
-}
-
-struct EventLoop {
-    pair: Arc<(Mutex<bool>, Condvar)>,
-}
-
-impl EventLoop {
-    pub fn new() -> Self {
-        EventLoop { pair: Arc::new((Mutex::new(false), Condvar::new())) }
-    }
-
-    /// Produce an iterator yielding all available events.
-    pub fn next(&self, display: &glium::Display) -> Vec<glium::glutin::Event> {
-        let mut events = Vec::new();
-
-        loop {
-            events.extend(display.poll_events());
-            if !events.is_empty() {
-                break;
-            }
-
-            let &(ref lock, ref cvar) = &*self.pair;
-            let guard = lock.lock().unwrap();
-            let mut needs_update = cvar.wait_timeout(guard, Duration::from_millis(16)).unwrap().0;
-
-            if *needs_update {
-                *needs_update = false;
-                break;
-            }
-        }
-
-        events
-    }
-
-    /// Notifies the event loop that the `Ui` requires another update whether or not there are any
-    /// pending events.
-    pub fn needs_update(&self) {
-        let &(ref lock, ref cvar) = &*self.pair;
-        let mut guard = lock.lock().unwrap();
-        *guard = true;
-        cvar.notify_one();
-    }
 }
 
 struct MyFormat;

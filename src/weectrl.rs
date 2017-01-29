@@ -65,7 +65,7 @@ pub enum DiscoveryMode {
     BroadcastOnly,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 // Object returned for each device found during discovery.
 pub struct DeviceInfo {
     /// Human readable name returned from the device homepage.
