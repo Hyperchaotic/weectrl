@@ -1,5 +1,5 @@
 [package]
-name = "weeapp"
+name = "weectrl"
 version = "0.1.0"
 authors = ["Klaus Nielsen <hyperchaotic@gmail.com>"]
 license = "MIT OR Apache-2.0"
@@ -20,9 +20,11 @@ serde_json = "0.8"
 serde_derive = "0.8.22"
 app_dirs = "1.1.1"
 url = "1.2.4"
+
+[dev-dependencies]
 image = "0.12.2"
 
-[dependencies.conrod]
+[dev-dependencies.conrod]
 git = "https://github.com/PistonDevelopers/conrod.git"
 features = ["glium", "winit"]
 

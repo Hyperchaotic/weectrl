@@ -1,23 +1,20 @@
 
+extern crate ssdp;
+
 use slog::DrainExt;
 use slog;
 use slog_stdlog;
 use slog_scope;
-extern crate ssdp;
 
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::net::IpAddr;
-
-use hyper::header::Connection;
-
-use std::io::Read;
-use std::sync::mpsc;
-
-use self::ssdp::message::{SearchRequest, SearchResponse};
-use self::ssdp::header::{HeaderMut, Man, MX, ST, SearchPort};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::sync::{Arc, Mutex, mpsc};
+use std::net::IpAddr;
+use std::io::Read;
+
+use hyper::header::Connection;
+use self::ssdp::message::{SearchRequest, SearchResponse};
+use self::ssdp::header::{HeaderMut, Man, MX, ST, SearchPort};
 
 use device::{State, Device};
 use rpc;
@@ -25,7 +22,6 @@ use xml;
 use xml::Root;
 use error::Error;
 use url::Url;
-
 use cache::{DiskCache, DeviceAddress};
 
 // pub const SUPPORTED_DEVICES: &'static [&'static str] = &["uuid:Socket", "uuid:Lightswitch"];
@@ -234,6 +230,9 @@ impl WeeController {
         if forget_devices {
             self.clear(false);
         }
+
+        use std::thread;
+
         let (tx, rx) = mpsc::channel(); // love channels
         let devices = self.devices.clone();
         let cache = self.cache.clone();
@@ -461,6 +460,7 @@ impl WeeController {
     /// Required before subscribing to notifications for devices.
     pub fn start_subscription_service(&mut self)
                                       -> Result<mpsc::Receiver<StateNotification>, Error> {
+        use std::thread;
 
         // Start daemon listening for subscription updates, if not running.
         if !self.subscription_daemon {

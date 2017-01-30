@@ -3,7 +3,6 @@
 #![windows_subsystem = "windows"]
 
 extern crate weectrl;
-
 extern crate chrono;
 extern crate app_dirs;
 
@@ -32,10 +31,9 @@ use conrod::backend::glium::glium::{DisplayBuild, Surface};
 
 use conrod::{Borderable, color};
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 
 use std::thread;
-use std::sync::mpsc;
 
 widget_ids! {
     struct Ids { canvas, top_bar, list_canvas, list,

@@ -8,7 +8,6 @@ A cross platform library and application for controlling Belkin WeMo switches an
 
 ![Linux](http://i.imgur.com/26aRUfE.png "Linux")   ![Windows](http://i.imgur.com/PoNrogW.png "Windows")
 
-
 ### Functionality
 The "Wee Controller" application will scan the local network for Belkin WeMo devices and list what's found. They can be switched on/off from the app and if a device changes state due to external activity (e.g. physical toggle or schedule) this will be reflected in the app UI due to the notification feature.
 
@@ -20,8 +19,26 @@ Searching for new devices can take 5-10 seconds but the app benefits from the ca
 ### Platforms
 Currently tested on Windows (10) and Linux (Mint KDE). It should work on macOS and might work on platforms supported by the Conrod (+Glium/Winit) toolkits.
 
+### Building
+
+```
+cargo build --release --example weeapp
+```
+
+An application icon can be found it `assets/images/icon.ico`. To insert it into the Windows binary use [rcedit][56bbd8db]:
+```
+rcedit target\release\examples\weeapp.exe --set-icon assets\images\icon.ico
+```
+  [56bbd8db]: https://github.com/electron/rcedit/releases "rcedit"
+
+### Logging
+
+Log file in the following locations:
+* UNIX like systems: `$HOME/.cache/WeeApp/WeeController.log`
+* Windows: `%USERPROFILE%\AppData\Local\hyperchaotic\WeeApp\WeeController.log`
+
 ## weectrl, the library
-### Functionality 
+### Functionality
 * Discover devices synchronously or asynchronously.
 * Retrieve detailed device information.
 * Switch devices on or off.
@@ -46,7 +63,7 @@ To discover devices on network or/and in cache asynchrously use:
 ``` rust
 let rx: mpsc::Receiver<DeviceInfo> = controller.discover_async(DiscoveryMode::CacheAndBroadcast, true, 3);
 ```
-Scans both cache and network, will "forget" non-responding devices, give network devices maximum 3 seconds to respond. 
+Scans both cache and network, will "forget" non-responding devices, give network devices maximum 3 seconds to respond.
 The returned channel will receive device information as they're found and when discovery ends it will be closed.
 
 To discover devices on network or/and in cache synchrously use:
@@ -108,4 +125,3 @@ Licensed under either of
 
  * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
  * MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
- 

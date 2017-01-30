@@ -8,3 +8,4 @@ os:
 
 script:
     - cargo build --verbose
+    - cargo build --verbose --example weeapp
