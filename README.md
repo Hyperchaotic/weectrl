@@ -117,7 +117,8 @@ let res = controller.get_binary_state(unique_id);
 }
 ```
 ## Compatibility
-Currently tested with Belkin WeMo LightSwitch and Socket only.
+Theoretically supports and device advertising the `urn:Belkin:service:basicevent:1` service. Does not support dimmers, motion sensors, yet.
+Currently only tested with Belkin WeMo LightSwitch and Socket only.
 
 ## License
 

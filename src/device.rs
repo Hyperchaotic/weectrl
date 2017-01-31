@@ -33,6 +33,10 @@ pub struct Device {
     pub location: String,
     /// IP address of local interface.
     local_ip: IpAddr,
+    /// Path for retrieve and toggle switch state.
+    binary_control_path: Option<String>,
+    /// Path for subscribing to events
+    event_path: Option<String>,
     /// Subscription ID for notifications, can be updated from daemon thread if it changes.
     sid: Option<Arc<Mutex<String>>>,
     /// If subscribed for notifications this is used to cancel th daemon.
@@ -48,6 +52,8 @@ impl Device {
             base_url: base_url.to_owned(),
             location: location.to_owned(),
             local_ip: local_ip,
+            binary_control_path: None,
+            event_path: None,
             sid: None,
             subscription_daemon: None,
             root: root.clone(),
@@ -69,10 +75,13 @@ impl Device {
         None
     }
 
-    /// Any supported device needs to have the Belkin basicevent service
-    pub fn valid_device(&self) -> bool {
+    /// Any supported device needs to have the Belkin basicevent service. Check for its
+    /// existence and save the paths for control/subscriptions for future use.
+    pub fn validate_device(&mut self) -> bool {
         for service in &self.root.device.service_list.service {
             if service.service_type == "urn:Belkin:service:basicevent:1" {
+                self.binary_control_path = Some(service.control_url.clone());
+                self.event_path = Some(service.event_sub_url.clone());
                 return true;
             }
         }
@@ -108,14 +117,27 @@ impl Device {
         self.cancel_subscription_daemon();
 
         if let Some(sid_shared) = self.sid.clone() {
-            let mut req_url = self.base_url.clone();
+            let req_url = Device::make_request_url(&self.base_url, &self.event_path)?;
             let sid = sid_shared.lock().unwrap().clone();
-            req_url.push_str("upnp/event/basicevent1");
             let _ = rpc::unsubscribe_action(&req_url, &sid)?; // TODO check statuscode
             self.sid = None;
             return Ok(sid);
         }
         Err(Error::NotSubscribed)
+    }
+
+    // Concatenate basic URL with request path.
+    // e.g. "http://192.168.0.10/ with "upnp/event/basicevent1".
+    fn make_request_url(base_url: &str, req_path: &Option<String>) -> Result<String, Error> {
+        if let Some(ref path) = *req_path {
+            let mut req_url = base_url.to_owned();
+            if req_url.ends_with("/") && path.starts_with("/") {
+                req_url = req_url.trim_right_matches("/").to_owned();
+            }
+            req_url.push_str(path);
+            return Ok(req_url);
+        }
+        Err(Error::UnsupportedDevice)
     }
 
     /// Send subscribe comand, cancel any currrent daemon and start a new if auto resub on.
@@ -126,11 +148,9 @@ impl Device {
                      -> Result<(String, u32), Error> {
 
         let callback = format!("<http://{}:{}/>", self.local_ip, port);
-        let mut req_url = self.base_url.clone();
-        req_url.push_str("upnp/event/basicevent1");
 
+        let req_url = Device::make_request_url(&self.base_url, &self.event_path)?;
         self.cancel_subscription_daemon();
-
         let res = rpc::subscribe(&req_url, seconds, &callback)?;
 
         let new_sid = Arc::new(Mutex::new(res.sid.clone()));
@@ -154,11 +174,8 @@ impl Device {
 
         if let Some(sid_shared) = self.sid.clone() {
             let sid = sid_shared.lock().unwrap().clone();
-            let mut req_url = self.base_url.clone();
-            req_url.push_str("upnp/event/basicevent1");
-
+            let req_url = Device::make_request_url(&self.base_url, &self.event_path)?;
             let res = rpc::resubscribe(&req_url, &sid, seconds)?;
-
             return Ok(res.timeout);
         }
         Err(Error::NotSubscribed)
@@ -211,12 +228,11 @@ impl Device {
     }
 
     /// Retrieve current switch binarystate.
-    pub fn update_binary_state(&mut self) -> Result<State, Error> {
+    pub fn fetch_binary_state(&mut self) -> Result<State, Error> {
 
         self.state = State::Unknown;
 
-        let mut req_url = self.base_url.clone();
-        req_url.push_str("upnp/control/basicevent1");
+        let req_url = Device::make_request_url(&self.base_url, &self.binary_control_path)?;
 
         let http_response = rpc::soap_action(&req_url,
                                              "\"urn:Belkin:service:basicevent:1#GetBinaryState\"",
@@ -240,10 +256,7 @@ impl Device {
             State::Off => request = xml::SETBINARYSTATEOFF,
             State::Unknown => return Err(Error::InvalidState),
         }
-
-        let mut req_url = self.base_url.clone();
-        req_url.push_str("upnp/control/basicevent1");
-
+        let req_url = Device::make_request_url(&self.base_url, &self.binary_control_path)?;
         let _ = rpc::soap_action(&req_url,
                                  "\"urn:Belkin:service:basicevent:1#SetBinaryState\"",
                                  request)?;

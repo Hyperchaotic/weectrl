@@ -176,10 +176,14 @@ impl WeeController {
         let mut base_url = Url::parse(location)?;
         base_url.set_path("/");
 
-        let mut dev = Device::new(State::Unknown, &base_url.to_string(), location, local_ip, &root);
+        let mut dev = Device::new(State::Unknown,
+                                  &base_url.to_string(),
+                                  location,
+                                  local_ip,
+                                  &root);
 
-        if let Some(_) = dev.update_binary_state().ok() {
-            if dev.valid_device() {
+        if dev.validate_device() {
+            if let Some(_) = dev.fetch_binary_state().ok() {
                 return Ok(dev);
             }
         }
@@ -226,7 +230,11 @@ impl WeeController {
     /// When discovery ends, after mx seconds and a bit, the channel will be closed.
     /// `forget_devices` = true will clear the internal list of devices. Discovery will only
     /// return devices to the client not already known internally.
-    pub fn discover_async(&mut self, mode: DiscoveryMode, forget_devices: bool, mx: u8) -> mpsc::Receiver<DeviceInfo> {
+    pub fn discover_async(&mut self,
+                          mode: DiscoveryMode,
+                          forget_devices: bool,
+                          mx: u8)
+                          -> mpsc::Receiver<DeviceInfo> {
         if forget_devices {
             self.clear(false);
         }
@@ -298,7 +306,11 @@ impl WeeController {
     /// For an asynchronous version use `discover_async`.
     /// `forget_devices` = true will clear the internal list of devices. Discovery will only
     /// return devices to the client not already known internally.
-    pub fn discover(&mut self, mode: DiscoveryMode, forget_devices: bool, mx: u8) -> Option<Vec<DeviceInfo>> {
+    pub fn discover(&mut self,
+                    mode: DiscoveryMode,
+                    forget_devices: bool,
+                    mx: u8)
+                    -> Option<Vec<DeviceInfo>> {
 
         let receiver = self.discover_async(mode, forget_devices, mx);
         let mut list = Vec::new();
@@ -351,7 +363,7 @@ impl WeeController {
               unique_id);
         if let Entry::Occupied(mut o) = devices.entry(unique_id.to_owned()) {
             let mut device = o.get_mut();
-            device.update_binary_state()?;
+            device.fetch_binary_state()?;
             return Ok(device.clone());
         }
         Err(Error::UnknownDevice)
@@ -366,7 +378,7 @@ impl WeeController {
         let mut devices = self.devices.lock().unwrap();
         if let Entry::Occupied(mut o) = devices.entry(unique_id.to_owned()) {
             let mut device = o.get_mut();
-            return device.update_binary_state();
+            return device.fetch_binary_state();
         }
         Err(Error::UnknownDevice)
     }
