@@ -17,7 +17,7 @@ Searching for new devices can take 5-10 seconds but the app benefits from the ca
 * The reload button will load known devices from cache and rescan the network - fast.
 
 ### Platforms
-Currently tested on Windows (10) and Linux (Mint KDE). It should work on macOS and might work on platforms supported by the Conrod (+Glium/Winit) toolkits.
+Currently tested on Windows 10 and Linux. It should work on macOS and might work on platforms supported by the Conrod (+Glium/Winit) toolkits.
 
 ### Building
 
@@ -25,7 +25,7 @@ Currently tested on Windows (10) and Linux (Mint KDE). It should work on macOS a
 cargo build --release --example weeapp
 ```
 
-An application icon can be found it `assets/images/icon.ico`. To insert it into the Windows binary use [rcedit][56bbd8db]:
+An application icon can be found in `assets/images/icon.ico`. To insert it into the Windows binary use [rcedit][56bbd8db]:
 ```
 rcedit target\release\examples\weeapp.exe --set-icon assets\images\icon.ico
 ```
@@ -118,7 +118,7 @@ let res = controller.get_binary_state(unique_id);
 ```
 ## Compatibility
 Theoretically supports and device advertising the `urn:Belkin:service:basicevent:1` service. Does not support dimmers, motion sensors, yet.
-Currently only tested with Belkin WeMo LightSwitch and Socket only.
+Currently only tested with Belkin WeMo LightSwitch and Socket.
 
 ## License
 
