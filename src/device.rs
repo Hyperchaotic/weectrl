@@ -12,6 +12,23 @@ use xml::Root;
 use error;
 use error::Error;
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum Model {
+    Lightswitch,
+    Socket,
+    Unknown(String),
+}
+
+impl<'a> From<&'a str> for Model {
+    fn from(string: &'a str) -> Model {
+        match string {
+            "LightSwitch" => return Model::Lightswitch,
+            "Socket" => return Model::Socket,
+            _ => return Model::Unknown(string.to_owned()),
+        };
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 /// Represents whether a device binarystate is on or off.
 pub enum State {
@@ -26,6 +43,7 @@ pub enum State {
 #[derive(Debug, Clone)]
 /// One WeMo or similar device
 pub struct Device {
+    pub model: Model,
     /// BinaryState of the device
     pub state: State,
     /// Device IP
@@ -47,8 +65,9 @@ pub struct Device {
 }
 
 impl Device {
-    pub fn new(state: State, base_url: &str, location: &str, local_ip: IpAddr, root: &Root) -> Device {
+    pub fn new(model: Model, state: State, base_url: &str, location: &str, local_ip: IpAddr, root: &Root) -> Device {
         let dev = Device {
+            model: model,
             state: state,
             base_url: base_url.to_owned(),
             location: location.to_owned(),

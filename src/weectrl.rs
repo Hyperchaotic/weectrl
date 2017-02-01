@@ -16,7 +16,7 @@ use hyper::header::Connection;
 use self::ssdp::message::{SearchRequest, SearchResponse};
 use self::ssdp::header::{HeaderMut, Man, MX, ST, SearchPort};
 
-use device::{State, Device};
+use device::{State, Device, Model};
 use rpc;
 use xml;
 use xml::Root;
@@ -67,6 +67,9 @@ pub enum DiscoveryMode {
 pub struct DeviceInfo {
     /// Human readable name returned from the device homepage.
     pub friendly_name: String,
+    /// Basic model name, e.g. LightSwitch, Socket. More information available via
+    /// the WeeController::get_device_description function.
+    pub model: Model,
     /// Unique identifier for this device, used for issuing commands to controller.
     pub unique_id: String,
     /// Network ostname, usually the IP address.
@@ -177,7 +180,9 @@ impl WeeController {
         let mut base_url = Url::parse(location)?;
         base_url.set_path("/");
 
-        let mut dev = Device::new(State::Unknown,
+        let model_str: &str = &root.device.model_name;
+        let mut dev = Device::new(Model::from(model_str),
+                                  State::Unknown,
                                   &base_url.to_string(),
                                   location,
                                   local_ip,
@@ -200,10 +205,6 @@ impl WeeController {
         let newdev = WeeController::retrieve_device(location)?;
         let mut devs = devices.lock().expect(error::FATAL_LOCK);
         if !devs.contains_key(&newdev.root.device.mac_address) {
-            info!(slog_scope::logger(),
-                  "Registering device {:?}.",
-                  &newdev.root.device.mac_address);
-            newdev.print_info();
 
             let mut hostname = String::new();
             if let Some(host) = Url::parse(location).ok() {
@@ -213,11 +214,18 @@ impl WeeController {
             }
 
             let new = DeviceInfo {
+                model: newdev.model.clone(),
                 friendly_name: newdev.root.device.friendly_name.clone(),
                 unique_id: newdev.root.device.mac_address.clone(),
                 hostname: hostname,
                 state: newdev.state,
             };
+
+            info!(slog_scope::logger(),
+                  "Registering device {:?} - {:?}.",
+                  newdev.model,
+                  &newdev.root.device.mac_address);
+            newdev.print_info();
 
             devs.insert(newdev.root.device.mac_address.clone(), newdev);
             return Ok(new);
