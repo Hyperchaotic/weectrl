@@ -20,6 +20,7 @@ use device::{State, Device};
 use rpc;
 use xml;
 use xml::Root;
+use error;
 use error::Error;
 use url::Url;
 use cache::{DiskCache, DeviceAddress};
@@ -152,13 +153,13 @@ impl WeeController {
     // Write list of active devices to disk cache
     fn refresh_cache(cache: Arc<Mutex<DiskCache>>, devices: Arc<Mutex<HashMap<String, Device>>>) {
         let mut list = Vec::new();
-        for (mac, dev) in devices.lock().unwrap().iter() {
+        for (mac, dev) in devices.lock().expect(error::FATAL_LOCK).iter() {
             list.push(DeviceAddress {
                 location: dev.location.clone(),
                 mac_address: mac.clone(),
             })
         }
-        cache.lock().unwrap().write(list);
+        cache.lock().expect(error::FATAL_LOCK).write(list);
     }
 
     // Given location URL, query a device. If successful add to list of active devices
@@ -197,7 +198,7 @@ impl WeeController {
                        -> Result<DeviceInfo, Error> {
 
         let newdev = WeeController::retrieve_device(location)?;
-        let mut devs = devices.lock().unwrap();
+        let mut devs = devices.lock().expect(error::FATAL_LOCK);
         if !devs.contains_key(&newdev.root.device.mac_address) {
             info!(slog_scope::logger(),
                   "Registering device {:?}.",
@@ -250,7 +251,7 @@ impl WeeController {
 
             if mode == DiscoveryMode::CacheOnly || mode == DiscoveryMode::CacheAndBroadcast {
                 info!(slog_scope::logger(), "Loading devices from cache.");
-                if let Some(cache_list) = cache.lock().unwrap().read() {
+                if let Some(cache_list) = cache.lock().expect(error::FATAL_LOCK).read() {
 
                     info!(slog_scope::logger(), "Cached devices {:?}", cache_list);
 
@@ -334,9 +335,9 @@ impl WeeController {
               clear_cache);
         self.unsubscribe_all();
         if clear_cache {
-            self.cache.lock().unwrap().clear();
+            self.cache.lock().expect(error::FATAL_LOCK).clear();
         }
-        self.devices.lock().unwrap().clear();
+        self.devices.lock().expect(error::FATAL_LOCK).clear();
     }
 
     /// Set the device BinaryState (On/Off)
@@ -346,7 +347,7 @@ impl WeeController {
               "Set binary state for Device {:?} {:?} ",
               unique_id,
               state);
-        let mut devices = self.devices.lock().unwrap();
+        let mut devices = self.devices.lock().expect(error::FATAL_LOCK);
         if let Entry::Occupied(mut o) = devices.entry(unique_id.to_owned()) {
             let mut device = o.get_mut();
             return device.set_binary_state(state);
@@ -356,7 +357,7 @@ impl WeeController {
 
     /// Return all information available about the device
     pub fn get_device_description(&mut self, unique_id: &str) -> Result<Device, Error> {
-        let mut devices = self.devices.lock().unwrap();
+        let mut devices = self.devices.lock().expect(error::FATAL_LOCK);
 
         info!(slog_scope::logger(),
               "get_device_description for device {:?}.",
@@ -375,7 +376,7 @@ impl WeeController {
         info!(slog_scope::logger(),
               "get_binary_state for device {:?}.",
               unique_id);
-        let mut devices = self.devices.lock().unwrap();
+        let mut devices = self.devices.lock().expect(error::FATAL_LOCK);
         if let Entry::Occupied(mut o) = devices.entry(unique_id.to_owned()) {
             let mut device = o.get_mut();
             return device.fetch_binary_state();
@@ -389,7 +390,7 @@ impl WeeController {
 
         info!(slog_scope::logger(), "unsubscribe_all.");
 
-        let mut devices = self.devices.lock().unwrap();
+        let mut devices = self.devices.lock().expect(error::FATAL_LOCK);
         let unique_ids: Vec<String> = devices.keys().map(|d| d.clone()).collect();
         for unique_id in unique_ids {
             if let Entry::Occupied(mut o) = devices.entry(unique_id.clone()) {
@@ -407,7 +408,7 @@ impl WeeController {
             return Err(Error::ServiceNotRunning);
         }
 
-        let mut devices = self.devices.lock().unwrap();
+        let mut devices = self.devices.lock().expect(error::FATAL_LOCK);
         if let Entry::Occupied(mut o) = devices.entry(unique_id.to_owned()) {
             let mut device = o.get_mut();
 
@@ -428,7 +429,7 @@ impl WeeController {
             return Err(Error::TimeoutTooShort);
         }
 
-        let mut devices = self.devices.lock().unwrap();
+        let mut devices = self.devices.lock().expect(error::FATAL_LOCK);
         if let Entry::Occupied(mut o) = devices.entry(unique_id.to_owned()) {
             let mut device = o.get_mut();
             info!(slog_scope::logger(), "resubscribe {:?}.", unique_id);
@@ -456,7 +457,7 @@ impl WeeController {
             return Err(Error::TimeoutTooShort);
         }
 
-        let mut devices = self.devices.lock().unwrap();
+        let mut devices = self.devices.lock().expect(error::FATAL_LOCK);
         if let Entry::Occupied(mut o) = devices.entry(unique_id.to_owned()) {
 
             let mut device = o.get_mut();
@@ -521,7 +522,7 @@ impl WeeController {
                     if let Some(state) = xml::get_binary_state(&data) {
 
                         // Iterate through the devices to find the subscribed one
-                        for (unique_id, dev) in devices.lock().unwrap().iter() {
+                        for (unique_id, dev) in devices.lock().expect(error::FATAL_LOCK).iter() {
                             if let Some(device_sid) = dev.sid() {
 
                                 // Found a match, send notification to the client
@@ -535,7 +536,7 @@ impl WeeController {
                                         unique_id: unique_id.to_owned(),
                                         state: State::from(state),
                                     };
-                                    let _ = cp.lock().unwrap().send(notification);
+                                    let _ = cp.lock().expect(error::FATAL_LOCK).send(notification);
                                     break;
                                 }
                             }

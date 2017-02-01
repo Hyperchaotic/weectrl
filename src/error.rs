@@ -4,6 +4,9 @@ use url::ParseError;
 use hyper::status::StatusCode;
 use serde_xml::Error as SerdeError;
 
+/// If a semaphore fails, panic immediately with this message.
+pub const FATAL_LOCK: &'static str = "FATAL Error, Lock failed!";
+
 #[derive(Debug)]
 pub enum Error {
     InvalidState,

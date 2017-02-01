@@ -78,6 +78,13 @@ enum Message {
     Notification(StateNotification),
 }
 
+struct ImageIds {
+    refresh_normal: conrod::image::Id,
+    refresh_press: conrod::image::Id,
+    clear_normal: conrod::image::Id,
+    clear_press: conrod::image::Id,
+}
+
 fn start_discovery_async(tx: mpsc::Sender<Message>,
                          ctrl: Arc<Mutex<WeeController>>) {
 
@@ -143,6 +150,8 @@ fn main() {
     // Include resources in binary to avoid problems with missing files
     let refresh_image_bytes = include_bytes!("../assets/images/refresh.png");
     let clear_image_bytes = include_bytes!("../assets/images/clear.png");
+    let refresh_press_image_bytes = include_bytes!("../assets/images/refresh_press.png");
+    let clear_press_image_bytes = include_bytes!("../assets/images/clear_press.png");
 
     // Build the window.
     let display = glium::glutin::WindowBuilder::new()
@@ -153,8 +162,13 @@ fn main() {
         .unwrap();
 
     let mut image_map = conrod::image::Map::new();
-    let refresh_image = image_map.insert(load_image(refresh_image_bytes, &display));
-    let clear_image = image_map.insert(load_image(clear_image_bytes, &display));
+
+    let image_ids = ImageIds {
+        refresh_normal: image_map.insert(load_image(refresh_image_bytes, &display)),
+        refresh_press: image_map.insert(load_image(refresh_press_image_bytes, &display)),
+        clear_normal: image_map.insert(load_image(clear_image_bytes, &display)),
+        clear_press: image_map.insert(load_image(clear_press_image_bytes, &display)),
+    };
 
     // Construct our `Ui`.
     let mut renderer = conrod::backend::glium::Renderer::new(&display).unwrap();
@@ -167,9 +181,7 @@ fn main() {
     let window_proxy = display.get_window().unwrap().create_window_proxy();
 
     // A function that runs the conrod loop.
-    fn run_conrod(logger: slog::Logger,
-                  refresh_image: conrod::image::Id,
-                  clear_image: conrod::image::Id,
+    fn run_conrod(logger: slog::Logger, image_ids: &ImageIds,
                   event_emit: std::sync::mpsc::Sender<Message>,
                   event_rx: std::sync::mpsc::Receiver<Message>,
                   render_tx: std::sync::mpsc::Sender<conrod::render::OwnedPrimitives>,
@@ -255,8 +267,7 @@ fn main() {
                    &mut app_state,
                    &mut weecontrol,
                    &mut notification_diag,
-                   refresh_image,
-                   clear_image);
+                   image_ids);
 
             // Render the `Ui` to a list of primitives that we can send to the main thread for
             // display.
@@ -277,8 +288,8 @@ fn main() {
     let log_clone = logger.clone();
     let event_emitter = event_tx.clone();
     std::thread::spawn(move || {
-        run_conrod(log_clone, refresh_image,
-                   clear_image,
+        run_conrod(log_clone,
+                   &image_ids,
                    event_emitter,
                    event_rx,
                    render_tx,
@@ -348,8 +359,7 @@ fn set_ui(ref mut ui: conrod::UiCell,
           app_state: &mut AppState,
           weecontrol: &mut Arc<Mutex<WeeController>>,
           notification_diag: &mut NotificationDialog,
-          refresh_image: conrod::image::Id,
-          clear_image: conrod::image::Id) {
+          image_ids: &ImageIds) {
 
     use conrod::{widget, Colorable, Labelable, Positionable, Sizeable, Widget};
 
@@ -370,7 +380,8 @@ fn set_ui(ref mut ui: conrod::UiCell,
         .top_left_with_margins_on(ids.canvas, (TOP_BAR_HEIGHT) as f64, 40.0)
         .set(ids.list_canvas, ui);
 
-    if widget::Button::image(refresh_image)
+    if widget::Button::image(image_ids.refresh_normal)
+        .press_image(image_ids.refresh_press)
         .w_h(40.0, 40.0)
         .top_right_with_margins_on(ids.top_bar, 0.0, 0.0)
         .color(color::TRANSPARENT)
@@ -381,8 +392,9 @@ fn set_ui(ref mut ui: conrod::UiCell,
             *app_state = AppState::StartDiscovery;
         }
     }
-
-    if widget::Button::image(clear_image)
+ 
+    if widget::Button::image(image_ids.clear_normal)
+        .press_image(image_ids.clear_press)
         .w_h(40.0, 40.0)
         .top_right_with_margins_on(ids.top_bar, 0.0, 40.0)
         .color(color::TRANSPARENT)
@@ -458,7 +470,6 @@ fn set_ui(ref mut ui: conrod::UiCell,
                 .color(color::YELLOW)
                 .w_h(180.0, 100.0)
                 .top_left_with_margins_on(ids.notify_canvas, 10.0, 10.0)
-                .align_text_middle()
                 .set(ids.notify_label, ui);
 
             if widget::Button::new()
@@ -475,8 +486,7 @@ fn set_ui(ref mut ui: conrod::UiCell,
             widget::Text::new("Searching...")
                 .color(color::YELLOW)
                 .w_h(180.0, 20.0)
-                .bottom_left_with_margins_on(ids.canvas, 15.0, 5.0)
-                .align_text_middle()
+                .bottom_left_with_margins_on(ids.canvas, 15.0, 15.0)
                 .set(ids.scanning_label, ui);
         }
     } else {
@@ -487,7 +497,6 @@ fn set_ui(ref mut ui: conrod::UiCell,
                 widget::Text::new("Scanning for devices...")
                     .color(color::LIGHT_YELLOW)
                     .middle_of(ids.list_canvas)
-                    .align_text_middle()
                     .set(ids.wait_label, ui);
                 *app_state = AppState::StartDiscovery;
             }
@@ -495,14 +504,12 @@ fn set_ui(ref mut ui: conrod::UiCell,
                 widget::Text::new("Scanning for devices...")
                     .color(color::LIGHT_YELLOW)
                     .middle_of(ids.list_canvas)
-                    .align_text_middle()
                     .set(ids.wait_label, ui);
             }
             AppState::NoDevices => {
                 widget::Text::new("No devices found.")
                     .color(color::LIGHT_YELLOW)
                     .middle_of(ids.list_canvas)
-                    .align_text_middle()
                     .set(ids.wait_label, ui);
             }
         }

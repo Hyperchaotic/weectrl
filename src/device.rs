@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use rpc;
 use xml;
 use xml::Root;
+use error;
 use error::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -69,7 +70,7 @@ impl Device {
     /// Returns copy of current subscription ID.
     pub fn sid(&self) -> Option<String> {
         if let Some(dev_sid) = self.sid.clone() {
-            let sid = dev_sid.lock().unwrap().clone();
+            let sid = dev_sid.lock().expect(error::FATAL_LOCK).clone();
             return Some(sid);
         }
         None
@@ -118,7 +119,7 @@ impl Device {
 
         if let Some(sid_shared) = self.sid.clone() {
             let req_url = Device::make_request_url(&self.base_url, &self.event_path)?;
-            let sid = sid_shared.lock().unwrap().clone();
+            let sid = sid_shared.lock().expect(error::FATAL_LOCK).clone();
             let _ = rpc::unsubscribe_action(&req_url, &sid)?; // TODO check statuscode
             self.sid = None;
             return Ok(sid);
@@ -173,7 +174,7 @@ impl Device {
         self.cancel_subscription_daemon();
 
         if let Some(sid_shared) = self.sid.clone() {
-            let sid = sid_shared.lock().unwrap().clone();
+            let sid = sid_shared.lock().expect(error::FATAL_LOCK).clone();
             let req_url = Device::make_request_url(&self.base_url, &self.event_path)?;
             let res = rpc::resubscribe(&req_url, &sid, seconds)?;
             return Ok(res.timeout);
@@ -199,13 +200,13 @@ impl Device {
             }
             let sid: String;
             {
-                sid = device_sid.lock().unwrap().clone();
+                sid = device_sid.lock().expect(error::FATAL_LOCK).clone();
             }
             match rpc::resubscribe(&url, &sid, initial_seconds) {
                 // Resub successful, register new timeout and SID
                 Ok(res) => {
                     duration = time::Duration::from_secs((res.timeout - 10) as u64);
-                    let mut sid_ref = device_sid.lock().unwrap();
+                    let mut sid_ref = device_sid.lock().expect(error::FATAL_LOCK);
                     sid_ref.clear();
                     sid_ref.push_str(&res.sid);
                 },
@@ -214,7 +215,7 @@ impl Device {
                     match rpc::subscribe(&url, initial_seconds, &callback) {
                         Ok(res) => {
                             duration = time::Duration::from_secs((res.timeout - 10) as u64);
-                            let mut sid_ref = device_sid.lock().unwrap();
+                            let mut sid_ref = device_sid.lock().expect(error::FATAL_LOCK);
                             sid_ref.clear();
                             sid_ref.push_str(&res.sid);
                         }
