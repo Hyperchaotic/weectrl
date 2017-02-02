@@ -3,6 +3,7 @@ use std::io;
 use url::ParseError;
 use hyper::status::StatusCode;
 use serde_xml::Error as SerdeError;
+use std::num::ParseIntError;
 
 /// If a semaphore fails, panic immediately with this message.
 pub const FATAL_LOCK: &'static str = "FATAL Error, Lock failed!";
@@ -25,6 +26,13 @@ pub enum Error {
     NetworkError(HttpError),
     IoError(io::Error),
     UrlError(ParseError),
+    ParseError(ParseIntError),
+}
+
+impl From<ParseIntError> for Error {
+    fn from(err: ParseIntError) -> Error {
+        Error::ParseError(err)
+    }
 }
 
 impl From<SerdeError> for Error {

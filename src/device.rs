@@ -6,7 +6,7 @@ use std::{thread, time};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
-use weectrl::{DeviceInfo, State};
+use weectrl::{DeviceInfo, State, Icon};
 use rpc;
 use xml;
 use error;
@@ -203,6 +203,35 @@ impl Device {
                 Err(_) => break,
             }
         }
+    }
+
+    /// Retrieve current switch binarystate.
+    pub fn fetch_icons(&mut self) -> Result<Vec<Icon>, Error> {
+
+        let mut icon_list = Vec::new();
+
+        self.info.state = State::Unknown;
+
+        for xmlicon in &self.info.root.device.icon_list.icon {
+
+            let width = xmlicon.width.parse::<u64>()?;
+            let height = xmlicon.height.parse::<u64>()?;
+            let depth = xmlicon.depth.parse::<u64>()?;
+
+            let req_file = Some(xmlicon.url.to_owned());
+            let req_url = Device::make_request_url(&self.info.base_url, &req_file)?;
+            let data = rpc::http_get(&req_url)?;
+            let icon = Icon {
+                mimetype: xmlicon.mimetype.to_owned(),
+                width: width,
+                height: height,
+                depth: depth,
+                data: data
+            };
+            icon_list.push(icon);
+        }
+
+        Ok(icon_list)
     }
 
     /// Retrieve current switch binarystate.

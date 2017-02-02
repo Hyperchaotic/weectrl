@@ -91,6 +91,15 @@ pub enum State {
 }
 
 #[derive(Debug, Clone)]
+pub struct Icon {
+    pub mimetype: String,
+    pub width: u64,
+    pub height: u64,
+    pub depth: u64,
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
 // Object returned for each device found during discovery.
 pub struct DeviceInfo {
     /// Human readable name returned from the device homepage.
@@ -396,6 +405,19 @@ impl WeeController {
         if let Entry::Occupied(mut o) = devices.entry(unique_id.to_owned()) {
             let mut device = o.get_mut();
             return device.fetch_binary_state();
+        }
+        Err(Error::UnknownDevice)
+    }
+
+    /// Query the device for BinaryState (On/Off)
+    pub fn get_icons(&mut self, unique_id: &str) -> Result<Vec<Icon>, Error> {
+
+        info!(slog_scope::logger(), "get_icons for device {:?}.", unique_id);
+
+        let mut devices = self.devices.lock().expect(error::FATAL_LOCK);
+        if let Entry::Occupied(mut o) = devices.entry(unique_id.to_owned()) {
+            let mut device = o.get_mut();
+            return device.fetch_icons();
         }
         Err(Error::UnknownDevice)
     }

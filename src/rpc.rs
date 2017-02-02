@@ -139,6 +139,21 @@ pub fn subscribe(url: &str, timeout: u32, callback: &str) -> Result<SubscribeRes
     handle_subscription_response(&mut response)
 }
 
+pub fn http_get(url: &str) -> Result<Vec<u8>, Error> {
+    let client = Client::new();
+
+    let mut response = client.get(url).send()?;
+
+    if response.status != StatusCode::Ok {
+        error!(slog_scope::logger(), "Received status code: {:?}", response.status);
+        return Err(Error::InvalidResponse(response.status));
+    }
+    // Copy data into vec
+    let mut data: Vec<u8> = Vec::new();
+    response.read_to_end(&mut data)?;
+    Ok(data)
+}
+
 /// Perform a HTTP SOAP action to specified URL.
 pub fn soap_action(url: &str, action: &str, xml: &str) -> Result<String, Error> {
     let client = Client::new();
@@ -170,9 +185,7 @@ pub fn soap_action(url: &str, action: &str, xml: &str) -> Result<String, Error> 
           response.status);
 
     if response.status != StatusCode::Ok {
-        error!(slog_scope::logger(),
-               "Received status code: {:?}",
-               response.status);
+        error!(slog_scope::logger(), "Received status code: {:?}", response.status);
         return Err(Error::InvalidResponse(response.status));
     }
 
