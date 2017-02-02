@@ -20,7 +20,6 @@ use std::io;
 use std::fs::OpenOptions;
 
 use weectrl::weectrl::*;
-use weectrl::device::State;
 
 #[macro_use]
 extern crate conrod;
@@ -181,7 +180,8 @@ fn main() {
     let window_proxy = display.get_window().unwrap().create_window_proxy();
 
     // A function that runs the conrod loop.
-    fn run_conrod(logger: slog::Logger, image_ids: &ImageIds,
+    fn run_conrod(weecontrol: Arc<Mutex<WeeController>>,
+                  image_ids: &ImageIds,
                   event_emit: std::sync::mpsc::Sender<Message>,
                   event_rx: std::sync::mpsc::Receiver<Message>,
                   render_tx: std::sync::mpsc::Sender<conrod::render::OwnedPrimitives>,
@@ -204,7 +204,7 @@ fn main() {
         ui.fonts.insert(font);
 
         let mut list: Vec<(DeviceInfo, bool)> = Vec::new();
-        let mut weecontrol = Arc::new(Mutex::new(WeeController::new(Some(logger))));
+        //let mut weecontrol = Arc::new(Mutex::new(WeeController::new(Some(logger))));
         start_notification_listener(event_emit.clone(), weecontrol.clone());
         // Many widgets require another frame to finish drawing after clicks or hovers, so we
         // insert an update into the conrod loop using this `bool` after each event.
@@ -265,7 +265,7 @@ fn main() {
                    &mut list,
                    &ids,
                    &mut app_state,
-                   &mut weecontrol,
+                   weecontrol.clone(),
                    &mut notification_diag,
                    image_ids);
 
@@ -279,16 +279,14 @@ fn main() {
                 window_proxy.wakeup_event_loop();
             }
         }
-        let mut controller = weecontrol.lock().unwrap();
-        controller.unsubscribe_all();
-        controller.clear(false);
     } // fn run_conrod
 
     // Spawn the conrod loop on its own thread.
-    let log_clone = logger.clone();
+    let weecontrol = Arc::new(Mutex::new(WeeController::new(Some(logger.clone()))));
+    let control_clone = weecontrol.clone();
     let event_emitter = event_tx.clone();
     std::thread::spawn(move || {
-        run_conrod(log_clone,
+        run_conrod(control_clone,
                    &image_ids,
                    event_emitter,
                    event_rx,
@@ -350,6 +348,8 @@ fn main() {
 
         last_update = std::time::Instant::now();
     }
+    let mut controller = weecontrol.lock().unwrap();
+    controller.unsubscribe_all();
 }
 
 // Declare the `WidgetId`s and instantiate the widgets.
@@ -357,7 +357,7 @@ fn set_ui(ref mut ui: conrod::UiCell,
           list: &mut Vec<(DeviceInfo, bool)>,
           ids: &Ids,
           app_state: &mut AppState,
-          weecontrol: &mut Arc<Mutex<WeeController>>,
+          weecontrol: Arc<Mutex<WeeController>>,
           notification_diag: &mut NotificationDialog,
           image_ids: &ImageIds) {
 
@@ -392,7 +392,7 @@ fn set_ui(ref mut ui: conrod::UiCell,
             *app_state = AppState::StartDiscovery;
         }
     }
- 
+
     if widget::Button::image(image_ids.clear_normal)
         .press_image(image_ids.clear_press)
         .w_h(40.0, 40.0)

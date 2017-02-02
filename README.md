@@ -54,7 +54,6 @@ Create new instance of controller:
 extern crate weectrl;
 
 use weectrl::weectrl::*;
-use weectrl::device::State;
 
 let mut weecontrol = WeeController::new(None);
 ```

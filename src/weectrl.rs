@@ -16,7 +16,7 @@ use hyper::header::Connection;
 use self::ssdp::message::{SearchRequest, SearchResponse};
 use self::ssdp::header::{HeaderMut, Man, MX, ST, SearchPort};
 
-use device::{State, Device, Model};
+use device::Device;
 use rpc;
 use xml;
 use xml::Root;
@@ -62,20 +62,53 @@ pub enum DiscoveryMode {
     BroadcastOnly,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum Model {
+    Lightswitch,
+    Socket,
+    Unknown(String),
+}
+
+impl<'a> From<&'a str> for Model {
+    fn from(string: &'a str) -> Model {
+        match string {
+            "LightSwitch" => return Model::Lightswitch,
+            "Socket" => return Model::Socket,
+            _ => return Model::Unknown(string.to_owned()),
+        };
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+/// Represents whether a device binarystate is on or off.
+pub enum State {
+    /// Device is switched on
+    On,
+    /// Device is switched off
+    Off,
+    /// Device is not responding to queries or commands
+    Unknown,
+}
+
 #[derive(Debug, Clone)]
 // Object returned for each device found during discovery.
 pub struct DeviceInfo {
     /// Human readable name returned from the device homepage.
     pub friendly_name: String,
-    /// Basic model name, e.g. LightSwitch, Socket. More information available via
-    /// the WeeController::get_device_description function.
+    /// Basic model name, e.g. LightSwitch, Socket.
     pub model: Model,
     /// Unique identifier for this device, used for issuing commands to controller.
     pub unique_id: String,
-    /// Network ostname, usually the IP address.
+    /// Network hostname, usually the IP address.
     pub hostname: String,
+    /// http address including port number
+    pub base_url: String,
+    /// Device "home" URL
+    pub location: String,
     /// Current switch binarystate
     pub state: State,
+    /// Device information, from XML homepage
+    pub root: Root,
 }
 
 /// Controller entity used for finding and control Belkin WeMo, and compatible, devices.
@@ -157,8 +190,9 @@ impl WeeController {
     fn refresh_cache(cache: Arc<Mutex<DiskCache>>, devices: Arc<Mutex<HashMap<String, Device>>>) {
         let mut list = Vec::new();
         for (mac, dev) in devices.lock().expect(error::FATAL_LOCK).iter() {
+            let location = dev.info.location.clone();
             list.push(DeviceAddress {
-                location: dev.location.clone(),
+                location: location,
                 mac_address: mac.clone(),
             })
         }
@@ -172,21 +206,28 @@ impl WeeController {
         let local_ip = WeeController::get_local_ip(&location)?;
         let root: Root = xml::parse_services(&body)?;
 
-        info!(slog_scope::logger(),
-              "Device {:?} {:?} ",
-              root.device.friendly_name,
-              location);
+        info!(slog_scope::logger(), "Device {:?} {:?} ", root.device.friendly_name, location);
 
+        let mut hostname = String::new();
         let mut base_url = Url::parse(location)?;
+        if let Some(hn) = base_url.host_str() {
+            hostname = hn.to_owned();
+        }
         base_url.set_path("/");
 
-        let model_str: &str = &root.device.model_name;
-        let mut dev = Device::new(Model::from(model_str),
-                                  State::Unknown,
-                                  &base_url.to_string(),
-                                  location,
-                                  local_ip,
-                                  &root);
+        let model = root.device.model_name.clone();
+        let model_str: &str= &model;
+        let info = DeviceInfo {
+            friendly_name: root.device.friendly_name.to_owned(),
+            model: Model::from(model_str),
+            unique_id: root.device.mac_address.to_owned(),
+            hostname: hostname,
+            base_url: base_url.to_string(),
+            location: location.to_owned(),
+            state: State::Unknown,
+            root: root,
+        };
+        let mut dev = Device::new(info, local_ip);
 
         if dev.validate_device() {
             if let Some(_) = dev.fetch_binary_state().ok() {
@@ -204,31 +245,13 @@ impl WeeController {
 
         let newdev = WeeController::retrieve_device(location)?;
         let mut devs = devices.lock().expect(error::FATAL_LOCK);
-        if !devs.contains_key(&newdev.root.device.mac_address) {
-
-            let mut hostname = String::new();
-            if let Some(host) = Url::parse(location).ok() {
-                if let Some(hn) = host.host_str() {
-                    hostname = hn.to_owned();
-                }
-            }
-
-            let new = DeviceInfo {
-                model: newdev.model.clone(),
-                friendly_name: newdev.root.device.friendly_name.clone(),
-                unique_id: newdev.root.device.mac_address.clone(),
-                hostname: hostname,
-                state: newdev.state,
-            };
-
-            info!(slog_scope::logger(),
-                  "Registering device {:?} - {:?}.",
-                  newdev.model,
-                  &newdev.root.device.mac_address);
+        let unique_id = newdev.info.root.device.mac_address.clone();
+        if !devs.contains_key(&unique_id) {
+            info!(slog_scope::logger(), "Registering device.");
             newdev.print_info();
-
-            devs.insert(newdev.root.device.mac_address.clone(), newdev);
-            return Ok(new);
+            let info = newdev.info.clone();
+            devs.insert(unique_id.to_owned(), newdev);
+            return Ok(info);
         }
         Err(Error::DeviceAlreadyRegistered)
     }
@@ -359,21 +382,6 @@ impl WeeController {
         if let Entry::Occupied(mut o) = devices.entry(unique_id.to_owned()) {
             let mut device = o.get_mut();
             return device.set_binary_state(state);
-        }
-        Err(Error::UnknownDevice)
-    }
-
-    /// Return all information available about the device
-    pub fn get_device_description(&mut self, unique_id: &str) -> Result<Device, Error> {
-        let mut devices = self.devices.lock().expect(error::FATAL_LOCK);
-
-        info!(slog_scope::logger(),
-              "get_device_description for device {:?}.",
-              unique_id);
-        if let Entry::Occupied(mut o) = devices.entry(unique_id.to_owned()) {
-            let mut device = o.get_mut();
-            device.fetch_binary_state()?;
-            return Ok(device.clone());
         }
         Err(Error::UnknownDevice)
     }

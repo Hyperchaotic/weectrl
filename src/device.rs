@@ -6,51 +6,16 @@ use std::{thread, time};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
+use weectrl::{DeviceInfo, State};
 use rpc;
 use xml;
-use xml::Root;
 use error;
 use error::Error;
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Model {
-    Lightswitch,
-    Socket,
-    Unknown(String),
-}
-
-impl<'a> From<&'a str> for Model {
-    fn from(string: &'a str) -> Model {
-        match string {
-            "LightSwitch" => return Model::Lightswitch,
-            "Socket" => return Model::Socket,
-            _ => return Model::Unknown(string.to_owned()),
-        };
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-/// Represents whether a device binarystate is on or off.
-pub enum State {
-    /// Device is switched on
-    On,
-    /// Device is switched off
-    Off,
-    /// Device is not responding to queries or commands
-    Unknown,
-}
 
 #[derive(Debug, Clone)]
 /// One WeMo or similar device
 pub struct Device {
-    pub model: Model,
-    /// BinaryState of the device
-    pub state: State,
-    /// Device IP
-    pub base_url: String,
-    /// Device "home" URL
-    pub location: String,
-    /// IP address of local interface.
+    /// IP address of local interface on the same network as the "remote" device.
     local_ip: IpAddr,
     /// Path for retrieve and toggle switch state.
     binary_control_path: Option<String>,
@@ -60,29 +25,25 @@ pub struct Device {
     sid: Option<Arc<Mutex<String>>>,
     /// If subscribed for notifications this is used to cancel th daemon.
     subscription_daemon: Option<mpsc::Sender<()>>,
-    /// Device information, from XML homepage
-    pub root: Root,
+    // Information about device, including that returned by 'home' url.
+    pub info: DeviceInfo,
 }
 
 impl Device {
-    pub fn new(model: Model, state: State, base_url: &str, location: &str, local_ip: IpAddr, root: &Root) -> Device {
+    pub fn new(info: DeviceInfo, local_ip: IpAddr) -> Device {
         let dev = Device {
-            model: model,
-            state: state,
-            base_url: base_url.to_owned(),
-            location: location.to_owned(),
             local_ip: local_ip,
             binary_control_path: None,
             event_path: None,
             sid: None,
             subscription_daemon: None,
-            root: root.clone(),
+            info: info,
         };
         info!(slog_scope::logger(),
               "New device {}, {} @ {}",
-              dev.root.device.friendly_name,
-              dev.root.device.mac_address,
-              base_url);
+              dev.info.root.device.friendly_name,
+              dev.info.root.device.mac_address,
+              dev.info.base_url);
         dev
     }
 
@@ -98,7 +59,7 @@ impl Device {
     /// Any supported device needs to have the Belkin basicevent service. Check for its
     /// existence and save the paths for control/subscriptions for future use.
     pub fn validate_device(&mut self) -> bool {
-        for service in &self.root.device.service_list.service {
+        for service in &self.info.root.device.service_list.service {
             if service.service_type == "urn:Belkin:service:basicevent:1" {
                 self.binary_control_path = Some(service.control_url.clone());
                 self.event_path = Some(service.event_sub_url.clone());
@@ -111,17 +72,14 @@ impl Device {
     /// Print basic information to logger
     pub fn print_info(&self) {
         info!(slog_scope::logger(),
-              "  -> Friendly name: {:?}. State: {:?}. Location: {:?}.",
-              self.root.device.friendly_name,
-              self.state,
-              self.location);
+              "Friendly name: {:?}. State: {:?}. Location: {:?}. Services: ",
+              self.info.root.device.friendly_name,
+              self.info.state,
+              self.info.location);
 
-        let mut list = String::from("    Sevices: ");
-        for service in &self.root.device.service_list.service {
-            list.push_str(&service.service_type);
-            list.push_str(" ");
+        for service in &self.info.root.device.service_list.service {
+            info!(slog_scope::logger(), "    - {:?}", service.service_type);
         }
-        info!(slog_scope::logger(), "{:?}", list);
     }
 
     fn cancel_subscription_daemon(&mut self) {
@@ -137,7 +95,7 @@ impl Device {
         self.cancel_subscription_daemon();
 
         if let Some(sid_shared) = self.sid.clone() {
-            let req_url = Device::make_request_url(&self.base_url, &self.event_path)?;
+            let req_url = Device::make_request_url(&self.info.base_url, &self.event_path)?;
             let sid = sid_shared.lock().expect(error::FATAL_LOCK).clone();
             let _ = rpc::unsubscribe_action(&req_url, &sid)?; // TODO check statuscode
             self.sid = None;
@@ -169,7 +127,7 @@ impl Device {
 
         let callback = format!("<http://{}:{}/>", self.local_ip, port);
 
-        let req_url = Device::make_request_url(&self.base_url, &self.event_path)?;
+        let req_url = Device::make_request_url(&self.info.base_url, &self.event_path)?;
         self.cancel_subscription_daemon();
         let res = rpc::subscribe(&req_url, seconds, &callback)?;
 
@@ -194,7 +152,7 @@ impl Device {
 
         if let Some(sid_shared) = self.sid.clone() {
             let sid = sid_shared.lock().expect(error::FATAL_LOCK).clone();
-            let req_url = Device::make_request_url(&self.base_url, &self.event_path)?;
+            let req_url = Device::make_request_url(&self.info.base_url, &self.event_path)?;
             let res = rpc::resubscribe(&req_url, &sid, seconds)?;
             return Ok(res.timeout);
         }
@@ -250,21 +208,21 @@ impl Device {
     /// Retrieve current switch binarystate.
     pub fn fetch_binary_state(&mut self) -> Result<State, Error> {
 
-        self.state = State::Unknown;
+        self.info.state = State::Unknown;
 
-        let req_url = Device::make_request_url(&self.base_url, &self.binary_control_path)?;
+        let req_url = Device::make_request_url(&self.info.base_url, &self.binary_control_path)?;
 
         let http_response = rpc::soap_action(&req_url,
                                              "\"urn:Belkin:service:basicevent:1#GetBinaryState\"",
                                              xml::GETBINARYSTATE)?;
 
         if let Some(state) = xml::get_binary_state(&http_response) {
-            self.state = State::from(state);
+            self.info.state = State::from(state);
         } else {
             return Err(Error::InvalidState);
         }
 
-        Ok(self.state)
+        Ok(self.info.state)
     }
 
     /// Send command to toggle switch state. If toggeling to same state an Error is returned.
@@ -276,12 +234,12 @@ impl Device {
             State::Off => request = xml::SETBINARYSTATEOFF,
             State::Unknown => return Err(Error::InvalidState),
         }
-        let req_url = Device::make_request_url(&self.base_url, &self.binary_control_path)?;
+        let req_url = Device::make_request_url(&self.info.base_url, &self.binary_control_path)?;
         let _ = rpc::soap_action(&req_url,
                                  "\"urn:Belkin:service:basicevent:1#SetBinaryState\"",
                                  request)?;
 
-        self.state = state;
+        self.info.state = state;
         Ok(state)
     }
 }
