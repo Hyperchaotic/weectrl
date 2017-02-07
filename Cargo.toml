@@ -1,6 +1,6 @@
 [package]
 name = "weectrl"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Klaus Nielsen <hyperchaotic@gmail.com>"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
@@ -20,6 +20,8 @@ serde_json = "0.8"
 serde_derive = "0.8.22"
 app_dirs = "1.1.1"
 url = "1.2.4"
+tokio-core = "0.1.4"
+futures = "0.1.10"
 
 [dev-dependencies]
 image = "0.12.2"

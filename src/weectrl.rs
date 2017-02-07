@@ -1,5 +1,10 @@
 
 extern crate ssdp;
+extern crate futures;
+extern crate tokio_core;
+
+use self::futures::{Async, Poll, Stream};
+use self::futures::task::{self, Task};
 
 use slog::DrainExt;
 use slog;
@@ -9,6 +14,7 @@ use slog_scope;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::{Arc, Mutex, mpsc};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::net::IpAddr;
 use std::io::Read;
 
@@ -24,8 +30,6 @@ use error;
 use error::Error;
 use url::Url;
 use cache::{DiskCache, DeviceAddress};
-
-// pub const SUPPORTED_DEVICES: &'static [&'static str] = &["uuid:Socket", "uuid:Lightswitch"];
 
 // Port number for daemon listening for notifications.
 // Should be changed to OS assigned.
@@ -120,12 +124,34 @@ pub struct DeviceInfo {
     pub root: Root,
 }
 
+/// Stream future for subscription notifications and discovery results.
+pub struct ControllerStream<I> {
+    rx_info: mpsc::Receiver<Option<I>>,
+    tx_task: mpsc::Sender<Task>,
+}
+
+impl<I> Stream for ControllerStream<I> {
+    type Item = I;
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        match self.rx_info.try_recv() {
+            Ok(object) => Ok(Async::Ready(object)), // If object==None it ends the future
+            Err(mpsc::TryRecvError::Disconnected) => Ok(Async::Ready(None)),
+            Err(mpsc::TryRecvError::Empty) => {
+                let _ = self.tx_task.send(task::park());
+                Ok(Async::NotReady)
+            }
+        }
+    }
+}
+
 /// Controller entity used for finding and control Belkin WeMo, and compatible, devices.
 pub struct WeeController {
     logger: slog::Logger,
     cache: Arc<Mutex<DiskCache>>,
     devices: Arc<Mutex<HashMap<String, Device>>>,
-    subscription_daemon: bool,
+    subscription_daemon: Arc<AtomicBool>,
 }
 
 impl WeeController {
@@ -136,7 +162,7 @@ impl WeeController {
             logger: logger.unwrap_or(slog::Logger::root(slog_stdlog::StdLog.fuse(), o!())),
             cache: Arc::new(Mutex::new(DiskCache::new())),
             devices: Arc::new(Mutex::new(HashMap::new())),
-            subscription_daemon: false,
+            subscription_daemon: Arc::new(AtomicBool::new(false)),
         };
         slog_scope::set_global_logger(object.logger.clone());
         info!(slog_scope::logger(), "Init");
@@ -215,7 +241,10 @@ impl WeeController {
         let local_ip = WeeController::get_local_ip(&location)?;
         let root: Root = xml::parse_services(&body)?;
 
-        info!(slog_scope::logger(), "Device {:?} {:?} ", root.device.friendly_name, location);
+        info!(slog_scope::logger(),
+              "Device {:?} {:?} ",
+              root.device.friendly_name,
+              location);
 
         let mut hostname = String::new();
         let mut base_url = Url::parse(location)?;
@@ -225,7 +254,7 @@ impl WeeController {
         base_url.set_path("/");
 
         let model = root.device.model_name.clone();
-        let model_str: &str= &model;
+        let model_str: &str = &model;
         let info = DeviceInfo {
             friendly_name: root.device.friendly_name.to_owned(),
             model: Model::from(model_str),
@@ -265,86 +294,10 @@ impl WeeController {
         Err(Error::DeviceAlreadyRegistered)
     }
 
-    /// Read list of know devices from disk cache as well as new devices responding on the network.
-    /// Returns immediately and send discovered devices back on the mpsc as they're found.
-    /// Allow network devices max `mx` seconds to respond.
-    /// When discovery ends, after mx seconds and a bit, the channel will be closed.
-    /// `forget_devices` = true will clear the internal list of devices. Discovery will only
-    /// return devices to the client not already known internally.
-    pub fn discover_async(&mut self,
-                          mode: DiscoveryMode,
-                          forget_devices: bool,
-                          mx: u8)
-                          -> mpsc::Receiver<DeviceInfo> {
-        if forget_devices {
-            self.clear(false);
-        }
-
-        use std::thread;
-
-        let (tx, rx) = mpsc::channel(); // love channels
-        let devices = self.devices.clone();
-        let cache = self.cache.clone();
-        thread::spawn(move || {
-
-            info!(slog_scope::logger(), "Starting discover");
-
-            if mode == DiscoveryMode::CacheOnly || mode == DiscoveryMode::CacheAndBroadcast {
-                info!(slog_scope::logger(), "Loading devices from cache.");
-                if let Some(cache_list) = cache.lock().expect(error::FATAL_LOCK).read() {
-
-                    info!(slog_scope::logger(), "Cached devices {:?}", cache_list);
-
-                    for cache_entry in cache_list.into_iter() {
-                        let device =
-                            WeeController::register_device(&cache_entry.location, &devices).ok();
-                        if let Some(new) = device {
-                            let _ = tx.send(new);
-                        }
-                    }
-                }
-            }
-
-            if mode == DiscoveryMode::BroadcastOnly || mode == DiscoveryMode::CacheAndBroadcast {
-                info!(slog_scope::logger(), "Broadcasting uPnP query.");
-                // Create Our Search Request
-                let mut request = SearchRequest::new();
-
-                let mut cache_dirty = false;
-
-                // Set Our Desired Headers
-                request.set(Man);
-                request.set(SearchPort(1900));
-                request.set(MX(mx));
-                request.set(ST::Target(ssdp::FieldMap::UPnP(String::from("rootdevice"))));
-
-                // Iterate over network responses to our broadcast.
-                if let Some(reqs) = request.multicast().ok() {
-                    for (msg, _) in reqs {
-                        if let Some(location) = WeeController::extract_sddp_header(&msg,
-                                                                                   "LOCATION") {
-                            let device = WeeController::register_device(&location, &devices).ok();
-                            if let Some(new) = device {
-                                cache_dirty = true; // This device wasn't in the disk cache.
-                                let _ = tx.send(new);
-                            }
-                        }
-                    }
-                }
-                // We added devices not already in diskcache, time to update it.
-                if cache_dirty {
-                    WeeController::refresh_cache(cache, devices);
-                }
-            }
-            info!(slog_scope::logger(), "Done! Ending discover thread.");
-        });
-        rx
-    }
-
     /// Retrieve and query devices. First read list stored on disk, then Broadcast
     /// network query and wait for responses. Allow devices max `mx` seconds to respond.
     /// This function is synchronous and will return everything found after mx seconds and a bit.
-    /// For an asynchronous version use `discover_async`.
+    /// For an asynchronous version use `discover_future`.
     /// `forget_devices` = true will clear the internal list of devices. Discovery will only
     /// return devices to the client not already known internally.
     pub fn discover(&mut self,
@@ -353,15 +306,17 @@ impl WeeController {
                     mx: u8)
                     -> Option<Vec<DeviceInfo>> {
 
-        let receiver = self.discover_async(mode, forget_devices, mx);
-        let mut list = Vec::new();
+        use self::tokio_core::reactor::Core;
 
-        loop {
-            if let Some(device) = receiver.recv().ok() {
+        let mut core = Core::new().unwrap();
+        let receiver = self.discover_future(mode, forget_devices, mx);
+        let mut list = Vec::new();
+        {
+            let processor = receiver.for_each(|device| {
                 list.push(device);
-            } else {
-                break;
-            }
+                Ok(())
+            });
+            core.run(processor).unwrap();
         }
 
         if list.is_empty() { None } else { Some(list) }
@@ -410,10 +365,25 @@ impl WeeController {
     }
 
     /// Query the device for BinaryState (On/Off)
+    pub fn get_icons2(&mut self, unique_id: &str) -> Result<Vec<Icon>, Error> {
+
+        info!(slog_scope::logger(),
+              "get_icons for device {:?}.",
+              unique_id);
+        let mut devices = self.devices.lock().expect(error::FATAL_LOCK);
+        if let Entry::Occupied(mut o) = devices.entry(unique_id.to_owned()) {
+            let mut device = o.get_mut();
+            return device.fetch_icons();
+        }
+        Err(Error::UnknownDevice)
+    }
+
+    /// Query the device for BinaryState (On/Off)
     pub fn get_icons(&mut self, unique_id: &str) -> Result<Vec<Icon>, Error> {
 
-        info!(slog_scope::logger(), "get_icons for device {:?}.", unique_id);
-
+        info!(slog_scope::logger(),
+              "get_icons for device {:?}.",
+              unique_id);
         let mut devices = self.devices.lock().expect(error::FATAL_LOCK);
         if let Entry::Occupied(mut o) = devices.entry(unique_id.to_owned()) {
             let mut device = o.get_mut();
@@ -427,7 +397,6 @@ impl WeeController {
     pub fn unsubscribe_all(&mut self) {
 
         info!(slog_scope::logger(), "unsubscribe_all.");
-
         let mut devices = self.devices.lock().expect(error::FATAL_LOCK);
         let unique_ids: Vec<String> = devices.keys().map(|d| d.clone()).collect();
         for unique_id in unique_ids {
@@ -442,7 +411,7 @@ impl WeeController {
     /// Cancel subscription for notifications from a device.
     pub fn unsubscribe(&mut self, unique_id: &str) -> Result<(), Error> {
 
-        if !self.subscription_daemon {
+        if !self.subscription_daemon.load(Ordering::Relaxed) {
             return Err(Error::ServiceNotRunning);
         }
 
@@ -459,7 +428,7 @@ impl WeeController {
     /// Renew a subscription for a device. Must happen before the subscription expires.
     pub fn resubscribe(&mut self, unique_id: &str, seconds: u32) -> Result<u32, Error> {
 
-        if !self.subscription_daemon {
+        if !self.subscription_daemon.load(Ordering::Relaxed) {
             return Err(Error::ServiceNotRunning);
         }
 
@@ -487,7 +456,7 @@ impl WeeController {
                      auto_resubscribe: bool)
                      -> Result<u32, Error> {
 
-        if !self.subscription_daemon {
+        if !self.subscription_daemon.load(Ordering::Relaxed) {
             return Err(Error::ServiceNotRunning);
         }
 
@@ -497,7 +466,6 @@ impl WeeController {
 
         let mut devices = self.devices.lock().expect(error::FATAL_LOCK);
         if let Entry::Occupied(mut o) = devices.entry(unique_id.to_owned()) {
-
             let mut device = o.get_mut();
 
             info!(slog_scope::logger(), "subscribe {:?}.", unique_id);
@@ -507,32 +475,49 @@ impl WeeController {
         Err(Error::UnknownDevice)
     }
 
-    /// Setup the subscription service and retrieve a mpsc on which to get notifications.
+    /// Setup the subscription service and retrieve a stream future on which to get notifications.
     /// Required before subscribing to notifications for devices.
-    pub fn start_subscription_service(&mut self)
-                                      -> Result<mpsc::Receiver<StateNotification>, Error> {
+    pub fn subscription_future(&mut self)
+                                      -> Result<ControllerStream<StateNotification>, Error> {
         use std::thread;
 
         // Start daemon listening for subscription updates, if not running.
-        if !self.subscription_daemon {
-            self.subscription_daemon = true;
+        if !self.subscription_daemon.load(Ordering::Relaxed) {
+            self.subscription_daemon.store(true, Ordering::Relaxed);
 
-            let (tx, rx) = mpsc::channel();
+            let (tx, rx) = mpsc::channel::<Option<StateNotification>>();
+            let (tx_task, rx_task) = mpsc::channel();
+            let future = ControllerStream {
+                rx_info: rx,
+                tx_task: tx_task,
+            };
             let devices = self.devices.clone();
+            let is_alive = self.subscription_daemon.clone();
             thread::spawn(move || {
-                WeeController::subscription_server(tx, devices);
+                WeeController::subscription_server(tx, rx_task, devices, is_alive);
             });
-            return Ok(rx);
+            return Ok(future);
         }
         Err(Error::ServiceAlreadyRunning)
     }
 
     // This daemon will run until the process ends, listening for notifications.
-    fn subscription_server(tx: mpsc::Sender<StateNotification>,
-                           devices: Arc<Mutex<HashMap<String, Device>>>) {
+    fn subscription_server(tx: mpsc::Sender<Option<StateNotification>>,
+                           rx_task: mpsc::Receiver<Task>,
+                           devices: Arc<Mutex<HashMap<String, Device>>>,
+                           is_alive: Arc<AtomicBool>) {
         use std::io;
         use hyper::server::{Server, Request, Response};
 
+        let task: Task;
+        match rx_task.recv() {
+            Ok(t) => task = t,
+            Err(e) => {
+                error!(slog_scope::logger(), "Unable to initialize Subscription daemon. {:?}", e);
+                is_alive.store(false, Ordering::Relaxed);
+                return;
+            }
+        }
         info!(slog_scope::logger(), "Subscription daemon started.");
 
         let address: String = format!("0.0.0.0:{}", DAEMON_PORT);
@@ -570,11 +555,24 @@ impl WeeController {
                                           unique_id,
                                           notification_sid,
                                           State::from(state));
-                                    let notification = StateNotification {
+                                          
+                                    let n = Some(StateNotification {
                                         unique_id: unique_id.to_owned(),
                                         state: State::from(state),
-                                    };
-                                    let _ = cp.lock().expect(error::FATAL_LOCK).send(notification);
+                                    });
+                                    let r = cp.lock().expect(error::FATAL_LOCK).send(n);
+
+                                    // If channel/future closed, exit this thread.
+                                    match r {
+                                        Ok(_) => {
+                                            task.unpark();
+                                        },
+                                        Err(e) => {
+                                            info!(slog_scope::logger(), "Future cancelled. {:?}", e);
+                                            is_alive.store(false, Ordering::Relaxed);
+                                            return;
+                                        }
+                                    }
                                     break;
                                 }
                             }
@@ -583,5 +581,96 @@ impl WeeController {
                 }
             })
             .unwrap();
+    }
+
+    /// Read list of know devices from disk cache as well as new devices responding on the network.
+    /// Returns immediately and send discovered devices back on the mpsc as they're found.
+    /// Allow network devices max `mx` seconds to respond.
+    /// When discovery ends, after mx seconds and a bit, the channel will be closed.
+    /// `forget_devices` = true will clear the internal list of devices. Discovery will only
+    /// return devices to the client not already known internally.
+    pub fn discover_future(&mut self,
+                          mode: DiscoveryMode,
+                          forget_devices: bool,
+                          mx: u8)
+                          -> ControllerStream<DeviceInfo> {
+
+        if forget_devices {
+            self.clear(false);
+        }
+
+        use std::thread;
+
+        let (tx_info, rx_info) = mpsc::channel::<Option<DeviceInfo>>();
+        let (tx_task, rx_task) = mpsc::channel();
+        let future = ControllerStream {
+            rx_info: rx_info,
+            tx_task: tx_task,
+        };
+
+        let devices = self.devices.clone();
+        let cache = self.cache.clone();
+        thread::spawn(move || {
+
+            let task = rx_task.recv().unwrap();
+
+            info!(slog_scope::logger(), "Starting discover");
+
+            if mode == DiscoveryMode::CacheOnly || mode == DiscoveryMode::CacheAndBroadcast {
+                info!(slog_scope::logger(), "Loading devices from cache.");
+                if let Some(cache_list) = cache.lock().expect(error::FATAL_LOCK).read() {
+
+                    info!(slog_scope::logger(), "Cached devices {:?}", cache_list);
+
+                    for cache_entry in cache_list.into_iter() {
+                        let device =
+                            WeeController::register_device(&cache_entry.location, &devices).ok();
+                        if let Some(new) = device {
+                            // making sure not to send None, as it terminates the future.
+                            let _ = tx_info.send(Some(new));
+                            task.unpark();
+                        }
+                    }
+                }
+            }
+
+            if mode == DiscoveryMode::BroadcastOnly || mode == DiscoveryMode::CacheAndBroadcast {
+                info!(slog_scope::logger(), "Broadcasting uPnP query.");
+                // Create Our Search Request
+                let mut request = SearchRequest::new();
+
+                let mut cache_dirty = false;
+
+                // Set Our Desired Headers
+                request.set(Man);
+                request.set(SearchPort(1900));
+                request.set(MX(mx));
+                request.set(ST::Target(ssdp::FieldMap::UPnP(String::from("rootdevice"))));
+
+                // Iterate over network responses to our broadcast.
+                if let Some(reqs) = request.multicast().ok() {
+                    for (msg, _) in reqs {
+                        if let Some(location) = WeeController::extract_sddp_header(&msg,
+                                                                                   "LOCATION") {
+                            let device = WeeController::register_device(&location, &devices).ok();
+                            if let Some(new) = device {
+                                cache_dirty = true; // This device wasn't in the disk cache.
+                                    // making sure not to send None, as it terminates the future.
+                                let _ = tx_info.send(Some(new));
+                                task.unpark();
+                            }
+                        }
+                    }
+                }
+                // We added devices not already in diskcache, time to update it.
+                if cache_dirty {
+                    WeeController::refresh_cache(cache, devices);
+                }
+            }
+            info!(slog_scope::logger(), "Done! Ending discover thread.");
+            let _ = tx_info.send(None);
+            task.unpark();
+        });
+        future
     }
 }

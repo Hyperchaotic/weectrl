@@ -20,7 +20,7 @@ Searching for new devices can take 5-10 seconds but the app benefits from the ca
 Currently tested on Windows 10 and Linux. It should work on macOS and might work on platforms supported by the Conrod (+Glium/Winit) toolkits.
 
 ### Building
-
+The library currently require nightly compiler.
 ```
 cargo build --release --example weeapp
 ```
@@ -58,16 +58,28 @@ use weectrl::weectrl::*;
 let mut weecontrol = WeeController::new(None);
 ```
 
-To discover devices on network or/and in cache asynchrously use:
+To discover devices on network or/and in cache asynchronously use the Stream Future:
 ``` rust
-let rx: mpsc::Receiver<DeviceInfo> = controller.discover_async(DiscoveryMode::CacheAndBroadcast, true, 3);
+use futures::stream::Stream;
+use tokio_core::reactor::Core;
+
+let mut core = Core::new().unwrap();
+let discovery: ControllerStream<DeviceInfo> = controller.discover_future(DiscoveryMode::CacheAndBroadcast, true, 3);
+
+let processor = discovery.for_each(|o| {
+    info!(" Got device {:?}", o.unique_id);
+    Ok(())
+});
+core.run(processor).unwrap();
 ```
 Scans both cache and network, will "forget" non-responding devices, give network devices maximum 3 seconds to respond.
 The returned channel will receive device information as they're found and when discovery ends it will be closed.
 
-To discover devices on network or/and in cache synchrously use:
+If Futures are inconvenient, see the function `fn start_discovery_async` in `examples/weeapp.rs` as an example of how to "wrap" the Stream future in channels.
+
+To discover devices on network or/and in cache synchronously use:
 ``` rust
-let list: Option<Vec<DeviceInfo>> = controller.discover_async(DiscoveryMode::CacheAndBroadcast, true, 3);
+let list: Option<Vec<DeviceInfo>> = controller.discover(DiscoveryMode::CacheAndBroadcast, true, 3);
 ```
 Returns when scan is done. Can take many seconds.
 
@@ -78,10 +90,23 @@ Let `unique_id` be a `DeviceInfo::unique_id` returned by previous discovery.
 
 Starting listening for notifications from subscribed devices:
 ``` rust
-let notification_mpsc = mpsc::Receiver<StateNotification>> = controller.start_subscription_service().unwrap();
-```
-Whenever a switch is toggled a message will appear on `notification_mpsc`. This channel will stay alive for the duration of the process.
+use futures::stream::Stream;
+use tokio_core::reactor::Core;
 
+let notifications: ControllerStream<StateNotification> = controller.subscription_future().unwrap();
+
+if let Some(notifications) = notifications {
+    let mut core = Core::new().unwrap();
+    let processor = notifications.for_each(|n| {
+        info!(" Got notification {:?}", n);
+        Ok(())
+    });
+    core.run(processor).unwrap();
+}
+
+
+```
+Whenever a switch is toggled a message will appear on the Stream.
 
 Subscribe to notifications for a device and instruct WeeController to automatically refresh subscriptions before they expire:
 ``` rust

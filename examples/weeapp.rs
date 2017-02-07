@@ -13,6 +13,12 @@ extern crate slog;
 extern crate slog_scope;
 extern crate slog_stream;
 
+extern crate futures;
+extern crate tokio_core;
+
+use futures::stream::Stream;
+use tokio_core::reactor::Core;
+
 use slog::DrainExt;
 use app_dirs::*;
 
@@ -40,7 +46,7 @@ widget_ids! {
     notify_canvas, notify_button, notify_label, scanning_label }
 }
 
-const SUBSCRIPTION_DURATION: u32 = 120;
+const SUBSCRIPTION_DURATION: u32 = 180;
 const WINDOW_WIDTH: u32 = 400;
 const TOP_BAR_HEIGHT: u32 = 40;
 const LIST_WIDTH: u32 = WINDOW_WIDTH - 80;
@@ -89,17 +95,18 @@ fn start_discovery_async(tx: mpsc::Sender<Message>,
 
     thread::spawn(move || {
         info!("Discovery Thread: Start discovery");
-        let rx: mpsc::Receiver<DeviceInfo> =
-            ctrl.lock().unwrap().discover_async(DiscoveryMode::CacheAndBroadcast, true, 3);
-        loop {
-            if let Some(d) = rx.recv().ok() {
-                info!(" >>>>>>>>>>>>>> Got device {:?}", d.unique_id);
-                let _ = tx.send(Message::DiscoveryItem(d));
-                info!(" <<<<<<<<<<<<<<< ");
-            } else {
-                break;
-            }
-        }
+
+        let mut core = Core::new().unwrap();
+        let discovery =
+            ctrl.lock().unwrap().discover_future(DiscoveryMode::CacheAndBroadcast, true, 3);
+
+        let processor = discovery.for_each(|o| {
+            info!(" Got device {:?}", o.unique_id);
+            let _ = tx.send(Message::DiscoveryItem(o));
+            Ok(())
+        });
+
+        core.run(processor).unwrap();
         let _ = tx.send(Message::DiscoveryEnded);
         info!("Discovery Thread: Ended.");
     });
@@ -109,21 +116,20 @@ fn start_notification_listener(tx: mpsc::Sender<Message>,
                                ctrl: Arc<Mutex<WeeController>>) {
 
     thread::spawn(move || {
-        let rx: Option<mpsc::Receiver<StateNotification>>;
+        let notifications;
         {
             let mut controller = ctrl.lock().unwrap();
-            rx = controller.start_subscription_service().ok();
+            notifications = controller.subscription_future().ok();
         }
+        // This message causes the UI to draw first time.
         let _ = tx.send(Message::NotificationsStarted);
-        if let Some(rx) = rx {
-            loop {
-                match rx.recv() {
-                    Ok(o) => {
-                        let _ = tx.send(Message::Notification(o));
-                    }
-                    Err(_) => break,
-                };
-            }
+        if let Some(notifications) = notifications {
+            let mut core = Core::new().unwrap();
+            let processor = notifications.for_each(|n| {
+                let _ = tx.send(Message::Notification(n));
+                Ok(())
+            });
+            core.run(processor).unwrap();
         }
     });
 }
