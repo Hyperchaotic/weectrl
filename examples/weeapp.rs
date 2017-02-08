@@ -86,8 +86,10 @@ enum Message {
 struct ImageIds {
     refresh_normal: conrod::image::Id,
     refresh_press: conrod::image::Id,
+    refresh_hover: conrod::image::Id,
     clear_normal: conrod::image::Id,
     clear_press: conrod::image::Id,
+    clear_hover: conrod::image::Id,
 }
 
 fn start_discovery_async(tx: mpsc::Sender<Message>,
@@ -157,6 +159,8 @@ fn main() {
     let clear_image_bytes = include_bytes!("../assets/images/clear.png");
     let refresh_press_image_bytes = include_bytes!("../assets/images/refresh_press.png");
     let clear_press_image_bytes = include_bytes!("../assets/images/clear_press.png");
+    let refresh_hover_image_bytes = include_bytes!("../assets/images/refresh_hover.png");
+    let clear_hover_image_bytes = include_bytes!("../assets/images/clear_hover.png");
 
     // Build the window.
     let display = glium::glutin::WindowBuilder::new()
@@ -171,8 +175,10 @@ fn main() {
     let image_ids = ImageIds {
         refresh_normal: image_map.insert(load_image(refresh_image_bytes, &display)),
         refresh_press: image_map.insert(load_image(refresh_press_image_bytes, &display)),
+        refresh_hover: image_map.insert(load_image(refresh_hover_image_bytes, &display)),
         clear_normal: image_map.insert(load_image(clear_image_bytes, &display)),
         clear_press: image_map.insert(load_image(clear_press_image_bytes, &display)),
+        clear_hover: image_map.insert(load_image(clear_hover_image_bytes, &display)),
     };
 
     // Construct our `Ui`.
@@ -388,6 +394,7 @@ fn set_ui(ref mut ui: conrod::UiCell,
 
     if widget::Button::image(image_ids.refresh_normal)
         .press_image(image_ids.refresh_press)
+        .hover_image(image_ids.refresh_hover)
         .w_h(40.0, 40.0)
         .top_right_with_margins_on(ids.top_bar, 0.0, 0.0)
         .color(color::TRANSPARENT)
@@ -398,9 +405,9 @@ fn set_ui(ref mut ui: conrod::UiCell,
             *app_state = AppState::StartDiscovery;
         }
     }
-
     if widget::Button::image(image_ids.clear_normal)
         .press_image(image_ids.clear_press)
+        .hover_image(image_ids.clear_hover)
         .w_h(40.0, 40.0)
         .top_right_with_margins_on(ids.top_bar, 0.0, 40.0)
         .color(color::TRANSPARENT)
