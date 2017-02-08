@@ -17,7 +17,7 @@ Searching for new devices can take 5-10 seconds but the app benefits from the ca
 * The reload button will load known devices from cache and rescan the network - fast.
 
 ### Platforms
-Currently tested on Windows 10 and Linux. It should work on macOS and might work on platforms supported by the Conrod (+Glium/Winit) toolkits.
+Currently tested on Windows 10, Linux and macOS.
 
 ### Building
 The library currently require nightly compiler.
