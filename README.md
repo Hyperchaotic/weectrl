@@ -6,7 +6,7 @@ A cross platform library and application for controlling Belkin WeMo switches an
 
 ### Screenshots
 
-![Linux](http://i.imgur.com/26aRUfE.png "Linux")   ![Windows](http://i.imgur.com/PoNrogW.png "Windows")
+![Linux](http://i.imgur.com/4QutZDQ.png "Linux")   ![Windows](http://i.imgur.com/PoNrogW.png "Windows")
 
 ### Functionality
 The "Wee Controller" application will scan the local network for Belkin WeMo devices and list what's found. They can be switched on/off from the app and if a device changes state due to external activity (e.g. physical toggle or schedule) this will be reflected in the app UI due to the notification feature.
