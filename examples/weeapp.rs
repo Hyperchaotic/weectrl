@@ -92,8 +92,7 @@ struct ImageIds {
     clear_hover: conrod::image::Id,
 }
 
-fn start_discovery_async(tx: mpsc::Sender<Message>,
-                         ctrl: Arc<Mutex<WeeController>>) {
+fn start_discovery_async(tx: mpsc::Sender<Message>, ctrl: Arc<Mutex<WeeController>>) {
 
     thread::spawn(move || {
         info!("Discovery Thread: Start discovery");
@@ -114,8 +113,7 @@ fn start_discovery_async(tx: mpsc::Sender<Message>,
     });
 }
 
-fn start_notification_listener(tx: mpsc::Sender<Message>,
-                               ctrl: Arc<Mutex<WeeController>>) {
+fn start_notification_listener(tx: mpsc::Sender<Message>, ctrl: Arc<Mutex<WeeController>>) {
 
     thread::spawn(move || {
         let notifications;
@@ -185,7 +183,8 @@ fn main() {
     let mut renderer = conrod::backend::glium::Renderer::new(&display).unwrap();
 
     // A channel to send events from the main `winit` thread to the conrod thread.
-    let (event_tx, event_rx): (std::sync::mpsc::Sender<Message>, std::sync::mpsc::Receiver<Message>) = std::sync::mpsc::channel();
+    let (event_tx, event_rx): (std::sync::mpsc::Sender<Message>,
+                               std::sync::mpsc::Receiver<Message>) = std::sync::mpsc::channel();
     // A channel to send `render::Primitive`s from the conrod thread to the `winit thread.
     let (render_tx, render_rx) = std::sync::mpsc::channel();
     // This window proxy will allow conrod to wake up the `winit::Window` for rendering.
@@ -202,7 +201,10 @@ fn main() {
         // Initial state
         let mut app_state = AppState::Initializing;
 
-        let mut notification_diag = NotificationDialog { is_open: false, message: String::new()};
+        let mut notification_diag = NotificationDialog {
+            is_open: false,
+            message: String::new(),
+        };
 
         let mut ui = conrod::UiBuilder::new([WINDOW_WIDTH as f64, WINDOW_HEIGHT as f64]).build();
 
@@ -216,7 +218,7 @@ fn main() {
         ui.fonts.insert(font);
 
         let mut list: Vec<(DeviceInfo, bool)> = Vec::new();
-        //let mut weecontrol = Arc::new(Mutex::new(WeeController::new(Some(logger))));
+        // let mut weecontrol = Arc::new(Mutex::new(WeeController::new(Some(logger))));
         start_notification_listener(event_emit.clone(), weecontrol.clone());
         // Many widgets require another frame to finish drawing after clicks or hovers, so we
         // insert an update into the conrod loop using this `bool` after each event.
@@ -250,14 +252,14 @@ fn main() {
                 match event {
                     Message::Event(e) => {
                         ui.handle_event(e);
-                    },
+                    }
                     Message::DiscoveryEnded => {
                         if list.is_empty() {
                             app_state = AppState::NoDevices;
                         } else {
                             app_state = AppState::Ready;
                         }
-                    },
+                    }
                     Message::DiscoveryItem(i) => {
                         info!("UI Got device {:?}", i.unique_id);
                         let i_state: bool = if i.state == State::On { true } else { false };
@@ -266,7 +268,7 @@ fn main() {
                             let _ = controller.subscribe(&i.unique_id, SUBSCRIPTION_DURATION, true);
                         }
                         list.push((i, i_state));
-                    },
+                    }
                     Message::NotificationsStarted => (),
                     Message::Notification(n) => update_list(&mut list, &n),
                 }
@@ -454,15 +456,21 @@ fn set_ui(ref mut ui: conrod::UiCell,
                         match res {
                             Ok(_) => list[i].1 = v,
                             Err(weectrl::error::Error::DeviceError) => {
-                                notification_diag.message = String::from("ERROR\nDevice \
-                                                                          returned 'Error'.");
-                                notification_diag.is_open = true;
+                                match controller.get_binary_state(&list[i].0.unique_id) {
+                                    Ok(state) => {
+                                        list[i].1 = if state == State::On { true } else { false };
+                                    }
+                                    Err(e) => {
+                                        notification_diag.message = format!("ERROR\n{:?}.", e);
+                                        notification_diag.is_open = true;
+                                    }
+                                };
                             }
                             Err(e) => {
                                 notification_diag.message = format!("ERROR\n{:?}.", e);
                                 notification_diag.is_open = true;
                             }
-                        }
+                        };
                         info!("WeeApp TOGGLE {:?} {:?}", i, v);
                     }
                 }
