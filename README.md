@@ -24,12 +24,15 @@ The library currently require nightly compiler.
 ```
 cargo build --release --example weeapp
 ```
-
+#### Windows addendum
 An application icon can be found in `assets/images/icon.ico`. To insert it into the Windows binary use [rcedit][56bbd8db]:
 ```
 rcedit target\release\examples\weeapp.exe --set-icon assets\images\icon.ico
 ```
   [56bbd8db]: https://github.com/electron/rcedit/releases "rcedit"
+
+#### macOS addendum
+A template application bundle can be found here `assets/WeeController.App`. After building the release binary copy `target/release/examples/weeapp` to `assets/WeeController.App/Contents/MacOs/weeapp`.
 
 ### Logging
 
