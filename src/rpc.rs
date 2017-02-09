@@ -71,7 +71,7 @@ fn handle_subscription_response(response: &mut Response) -> Result<SubscribeResp
         _ => String::new(),
     };
 
-    let mut timeout = if timeout_string.starts_with("Second-") {
+    let timeout = if timeout_string.starts_with("Second-") {
         let (_, number) = timeout_string.split_at("Second-".len());
         match number.parse::<u32>() {
             Ok(n) => n,
