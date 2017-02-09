@@ -138,7 +138,7 @@ fn main() {
     // get path for logfile: %USERPROFILE%\AppData\Local\hyperchaotic\WeeApp\WeeController.log
     //                   or: $HOME/.cache/WeeApp/WeeController.log
     let mut log_path = String::from(LOG_FILE);
-    if let Some(mut path) = app_root(AppDataType::UserCache, &APP_INFO).ok() {
+    if let Ok(mut path) = app_root(AppDataType::UserCache, &APP_INFO) {
         path.push(LOG_FILE);
         if let Some(st) = path.to_str() {
             log_path = st.to_owned();
@@ -262,7 +262,7 @@ fn main() {
                     }
                     Message::DiscoveryItem(i) => {
                         info!("UI Got device {:?}", i.unique_id);
-                        let i_state: bool = if i.state == State::On { true } else { false };
+                        let i_state: bool = i.state == State::On;
                         {
                             let mut controller = weecontrol.lock().unwrap();
                             let _ = controller.subscribe(&i.unique_id, SUBSCRIPTION_DURATION, true);
@@ -437,7 +437,7 @@ fn set_ui(ref mut ui: conrod::UiCell,
 
         while let Some(item) = items.next(ui) {
             let i = item.i;
-            let label = format!("{}", list[i].0.friendly_name);
+            let label = list[i].0.friendly_name.clone();
             let label_color = conrod::color::WHITE;
             let color = conrod::color::LIGHT_BLUE;
             let toggle = widget::Toggle::new(list[i].1)
@@ -458,7 +458,7 @@ fn set_ui(ref mut ui: conrod::UiCell,
                             Err(weectrl::error::Error::DeviceError) => {
                                 match controller.get_binary_state(&list[i].0.unique_id) {
                                     Ok(state) => {
-                                        list[i].1 = if state == State::On { true } else { false };
+                                        list[i].1 = state == State::On;
                                     }
                                     Err(e) => {
                                         notification_diag.message = format!("ERROR\n{:?}.", e);
@@ -580,7 +580,7 @@ impl slog_stream::Format for MyFormat {
                           rinfo.level(),
                           rinfo.module(),
                           rinfo.msg());
-        let _ = try!(io.write_all(msg.as_bytes()));
+        io.write_all(msg.as_bytes())?;
         Ok(())
     }
 }

@@ -109,8 +109,8 @@ impl Device {
     fn make_request_url(base_url: &str, req_path: &Option<String>) -> Result<String, Error> {
         if let Some(ref path) = *req_path {
             let mut req_url = base_url.to_owned();
-            if req_url.ends_with("/") && path.starts_with("/") {
-                req_url = req_url.trim_right_matches("/").to_owned();
+            if req_url.ends_with('/') && path.starts_with('/') {
+                req_url = req_url.trim_right_matches('/').to_owned();
             }
             req_url.push_str(path);
             return Ok(req_url);
@@ -142,7 +142,7 @@ impl Device {
             });
         }
 
-        return Ok((res.sid, res.timeout));
+        Ok((res.sid, res.timeout))
     }
 
     /// Resubscribe for notifications. This will cancel auto resubscribe is active.
@@ -186,7 +186,7 @@ impl Device {
                     let mut sid_ref = device_sid.lock().expect(error::FATAL_LOCK);
                     sid_ref.clear();
                     sid_ref.push_str(&res.sid);
-                },
+                }
                 // We were too late (perhaps computer was asleep). Subscribe anew.
                 Err(Error::InvalidResponse(StatusCode::PreconditionFailed)) => {
                     match rpc::subscribe(&url, initial_seconds, &callback) {
@@ -226,7 +226,7 @@ impl Device {
                 width: width,
                 height: height,
                 depth: depth,
-                data: data
+                data: data,
             };
             icon_list.push(icon);
         }

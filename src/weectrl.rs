@@ -76,10 +76,10 @@ pub enum Model {
 impl<'a> From<&'a str> for Model {
     fn from(string: &'a str) -> Model {
         match string {
-            "LightSwitch" => return Model::Lightswitch,
-            "Socket" => return Model::Socket,
-            _ => return Model::Unknown(string.to_owned()),
-        };
+            "LightSwitch" => Model::Lightswitch,
+            "Socket" => Model::Socket,
+            _ => Model::Unknown(string.to_owned()),
+        }
     }
 }
 
@@ -190,7 +190,7 @@ impl WeeController {
         use std::net::TcpStream;
 
         // extract ip:port from URL
-        let location_url = Url::parse(&location)?;
+        let location_url = Url::parse(location)?;
         if let Some(host) = location_url.host_str() {
 
             let mut destination = String::from(host);
@@ -237,8 +237,8 @@ impl WeeController {
     // Given location URL, query a device. If successful add to list of active devices
     fn retrieve_device(location: &str) -> Result<Device, Error> {
 
-        let body = WeeController::get_device_home(&location)?;
-        let local_ip = WeeController::get_local_ip(&location)?;
+        let body = WeeController::get_device_home(location)?;
+        let local_ip = WeeController::get_local_ip(location)?;
         let root: Root = xml::parse_services(&body)?;
 
         info!(slog_scope::logger(),
@@ -268,12 +268,12 @@ impl WeeController {
         let mut dev = Device::new(info, local_ip);
 
         if dev.validate_device() {
-            if let Some(_) = dev.fetch_binary_state().ok() {
+            if dev.fetch_binary_state().ok().is_some() {
                 return Ok(dev);
             }
         }
         info!(slog_scope::logger(), "Device not supported.");
-        return Err(Error::UnsupportedDevice);
+        Err(Error::UnsupportedDevice)
     }
 
     // Add device to hashmap.
@@ -477,8 +477,7 @@ impl WeeController {
 
     /// Setup the subscription service and retrieve a stream future on which to get notifications.
     /// Required before subscribing to notifications for devices.
-    pub fn subscription_future(&mut self)
-                                      -> Result<ControllerStream<StateNotification>, Error> {
+    pub fn subscription_future(&mut self) -> Result<ControllerStream<StateNotification>, Error> {
         use std::thread;
 
         // Start daemon listening for subscription updates, if not running.
@@ -513,7 +512,9 @@ impl WeeController {
         match rx_task.recv() {
             Ok(t) => task = t,
             Err(e) => {
-                error!(slog_scope::logger(), "Unable to initialize Subscription daemon. {:?}", e);
+                error!(slog_scope::logger(),
+                       "Unable to initialize Subscription daemon. {:?}",
+                       e);
                 is_alive.store(false, Ordering::Relaxed);
                 return;
             }
@@ -555,7 +556,7 @@ impl WeeController {
                                           unique_id,
                                           notification_sid,
                                           State::from(state));
-                                          
+
                                     let n = Some(StateNotification {
                                         unique_id: unique_id.to_owned(),
                                         state: State::from(state),
@@ -566,9 +567,11 @@ impl WeeController {
                                     match r {
                                         Ok(_) => {
                                             task.unpark();
-                                        },
+                                        }
                                         Err(e) => {
-                                            info!(slog_scope::logger(), "Future cancelled. {:?}", e);
+                                            info!(slog_scope::logger(),
+                                                  "Future cancelled. {:?}",
+                                                  e);
                                             is_alive.store(false, Ordering::Relaxed);
                                             return;
                                         }
@@ -590,10 +593,10 @@ impl WeeController {
     /// `forget_devices` = true will clear the internal list of devices. Discovery will only
     /// return devices to the client not already known internally.
     pub fn discover_future(&mut self,
-                          mode: DiscoveryMode,
-                          forget_devices: bool,
-                          mx: u8)
-                          -> ControllerStream<DeviceInfo> {
+                           mode: DiscoveryMode,
+                           forget_devices: bool,
+                           mx: u8)
+                           -> ControllerStream<DeviceInfo> {
 
         if forget_devices {
             self.clear(false);
@@ -622,7 +625,8 @@ impl WeeController {
 
                     info!(slog_scope::logger(), "Cached devices {:?}", cache_list);
 
-                    for cache_entry in cache_list.into_iter() {
+                    for cache_entry in cache_list {
+                        //}.into_iter() {
                         let device =
                             WeeController::register_device(&cache_entry.location, &devices).ok();
                         if let Some(new) = device {
@@ -655,7 +659,7 @@ impl WeeController {
                             let device = WeeController::register_device(&location, &devices).ok();
                             if let Some(new) = device {
                                 cache_dirty = true; // This device wasn't in the disk cache.
-                                    // making sure not to send None, as it terminates the future.
+                                // making sure not to send None, as it terminates the future.
                                 let _ = tx_info.send(Some(new));
                                 task.unpark();
                             }

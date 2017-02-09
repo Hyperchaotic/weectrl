@@ -25,12 +25,10 @@ pub struct SubscribeResponse {
 
 pub fn extract_sid(headers: &Headers) -> Option<String> {
 
-    let sid = match headers.get() {
+    match headers.get() {
         Some(&SubscribeSID(ref sid)) => Some(sid.clone()),
         None => None,
-    };
-
-    sid
+    }
 }
 
 /// Perform a HTTP unsubscribe action to specified URL.
@@ -73,15 +71,15 @@ fn handle_subscription_response(response: &mut Response) -> Result<SubscribeResp
         _ => String::new(),
     };
 
-    let mut timeout = 0;
-
-    if timeout_string.starts_with("Second-") {
+    let mut timeout = if timeout_string.starts_with("Second-") {
         let (_, number) = timeout_string.split_at("Second-".len());
-        timeout = match number.parse::<u32>() {
+        match number.parse::<u32>() {
             Ok(n) => n,
             Err(_) => 0,
-        };
-    }
+        }
+    } else {
+        0
+    };
 
     let mut body = String::new();
     response.read_to_string(&mut body)?;
@@ -145,7 +143,9 @@ pub fn http_get(url: &str) -> Result<Vec<u8>, Error> {
     let mut response = client.get(url).send()?;
 
     if response.status != StatusCode::Ok {
-        error!(slog_scope::logger(), "Received status code: {:?}", response.status);
+        error!(slog_scope::logger(),
+               "Received status code: {:?}",
+               response.status);
         return Err(Error::InvalidResponse(response.status));
     }
     // Copy data into vec
@@ -185,7 +185,9 @@ pub fn soap_action(url: &str, action: &str, xml: &str) -> Result<String, Error> 
           response.status);
 
     if response.status != StatusCode::Ok {
-        error!(slog_scope::logger(), "Received status code: {:?}", response.status);
+        error!(slog_scope::logger(),
+               "Received status code: {:?}",
+               response.status);
         return Err(Error::InvalidResponse(response.status));
     }
 

@@ -38,7 +38,7 @@ pub struct DiskCache {
 impl DiskCache {
     pub fn new() -> DiskCache {
         let mut file_path: Option<std::path::PathBuf> = None;
-        if let Some(mut path) = app_root(AppDataType::UserCache, &APP_INFO).ok() {
+        if let Ok(mut path) = app_root(AppDataType::UserCache, &APP_INFO) {
             path.push(CACHE_FILE);
             file_path = Some(path);
         }
@@ -51,8 +51,8 @@ impl DiskCache {
         if let Some(ref fpath) = self.cache_file {
             let data = CacheData { cache: addresses };
 
-            if let Some(serialized) = serde_json::to_string(&data).ok() {
-                if let Some(mut buffer) = File::create(fpath).ok() {
+            if let Ok(serialized) = serde_json::to_string(&data) {
+                if let Ok(mut buffer) = File::create(fpath) {
                     let _ = buffer.write_all(&serialized.into_bytes());
                 }
             }
@@ -62,7 +62,7 @@ impl DiskCache {
     pub fn read(&self) -> Option<Vec<DeviceAddress>> {
 
         if let Some(ref fpath) = self.cache_file {
-            if let Some(mut file) = File::open(fpath).ok() {
+            if let Ok(mut file) = File::open(fpath) {
                 let mut s = String::new();
                 let _ = file.read_to_string(&mut s);
                 let cachedata: Option<CacheData> = serde_json::de::from_str(&s).ok();

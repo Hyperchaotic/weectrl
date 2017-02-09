@@ -105,23 +105,33 @@ pub fn get_binary_state(data: &str) -> Option<u8> {
     } else if data.contains("<BinaryState>0</BinaryState>") {
         return Some(0);
     }
-    return None;
+    None
 }
 
-pub const SETBINARYSTATEOFF: &'static str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>
-<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">
+pub const SETBINARYSTATEOFF: &'static str =
+    "<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<s:Envelope \
+     xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" \
+     s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">
   <s:Body>
-    <u:SetBinaryState xmlns:u=\"urn:Belkin:service:basicevent:1\">
-      <BinaryState>0</BinaryState>
+    \
+     <u:SetBinaryState xmlns:u=\"urn:Belkin:service:basicevent:1\">
+      \
+     <BinaryState>0</BinaryState>
     </u:SetBinaryState>
   </s:Body>
 </s:Envelope>";
 
-pub const SETBINARYSTATEON: &'static str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>
-<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">
+pub const SETBINARYSTATEON: &'static str =
+    "<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<s:Envelope \
+     xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" \
+     s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">
   <s:Body>
-    <u:SetBinaryState xmlns:u=\"urn:Belkin:service:basicevent:1\">
-      <BinaryState>1</BinaryState>
+    \
+     <u:SetBinaryState xmlns:u=\"urn:Belkin:service:basicevent:1\">
+      \
+     <BinaryState>1</BinaryState>
     </u:SetBinaryState>
   </s:Body>
 </s:Envelope>";
