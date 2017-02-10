@@ -25,7 +25,7 @@ use app_dirs::*;
 use std::io;
 use std::fs::OpenOptions;
 
-use weectrl::weectrl::*;
+use weectrl::*;
 
 #[macro_use]
 extern crate conrod;

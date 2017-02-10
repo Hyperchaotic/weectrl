@@ -5,9 +5,12 @@
 //! Discovery can be synchronous or asynchronous and a list of known devices is cached on disk
 //! for quick startup.
 
-#[macro_use] extern crate hyper;
-#[macro_use] extern crate serde_derive;
-#[macro_use] extern crate slog;
+#[macro_use]
+extern crate hyper;
+#[macro_use]
+extern crate serde_derive;
+#[macro_use]
+extern crate slog;
 extern crate slog_stdlog;
 extern crate slog_scope;
 
@@ -16,8 +19,11 @@ extern crate serde_xml;
 extern crate url;
 
 pub mod weectrl;
-pub mod device;
-pub mod xml;
-pub mod cache;
-pub mod rpc;
+pub use weectrl::{StateNotification, DiscoveryMode, Model, State, Icon, DeviceInfo, WeeController};
+
 pub mod error;
+
+mod device;
+mod xml;
+mod cache;
+mod rpc;

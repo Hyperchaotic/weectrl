@@ -56,7 +56,7 @@ Create new instance of controller:
 ``` rust
 extern crate weectrl;
 
-use weectrl::weectrl::*;
+use weectrl::*;
 
 let mut weecontrol = WeeController::new(None);
 ```
