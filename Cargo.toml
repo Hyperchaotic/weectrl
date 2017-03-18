@@ -2,8 +2,13 @@
 name = "weectrl"
 version = "0.5.0"
 authors = ["Klaus Nielsen <hyperchaotic@gmail.com>"]
-license = "MIT OR Apache-2.0"
+license = "MIT/Apache-2.0"
 readme = "README.md"
+keywords = ["WeMo"]
+repository = "https://github.com/Hyperchaotic/weectrl"
+homepage = "https://github.com/Hyperchaotic/weectrl"
+description = "A library and application for controlling WeMo switches."
+categories = ["Network Programming"]
 
 [dependencies]
 slog = "1.4.1"
