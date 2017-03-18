@@ -4,19 +4,14 @@ extern crate slog_scope;
 extern crate futures;
 extern crate hyper;
 
-use self::futures::future::FutureResult;
 use self::futures::task::Task;
 
 use self::futures::Stream;
-use self::futures::future;
 use self::futures::Future;
 
-use hyper::StatusCode;
 use hyper::header::{ContentLength, ContentType};
 use hyper::server::{Service, Request, Response};
-use hyper::Method::Extension;
 use hyper::mime::{Mime, TopLevel, SubLevel};
-
 
 use std::sync::{Arc, Mutex, mpsc};
 use std::collections::HashMap;
