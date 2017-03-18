@@ -1,7 +1,7 @@
 use hyper::Error as HttpError;
+use hyper::StatusCode;
 use std::io;
 use url::ParseError;
-use hyper::status::StatusCode;
 use serde_xml::Error as SerdeError;
 use std::num::ParseIntError;
 

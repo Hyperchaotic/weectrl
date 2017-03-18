@@ -98,9 +98,12 @@ fn start_discovery_async(tx: mpsc::Sender<Message>, ctrl: Arc<Mutex<WeeControlle
         info!("Discovery Thread: Start discovery");
 
         let mut core = Core::new().unwrap();
-        let discovery =
-            ctrl.lock().unwrap().discover_future(DiscoveryMode::CacheAndBroadcast, true, 3);
 
+        let discovery;
+        {
+            let mut controller = ctrl.lock().unwrap();
+            discovery = controller.discover_future(DiscoveryMode::CacheAndBroadcast, true, 3);
+        }
         let processor = discovery.for_each(|o| {
             info!(" Got device {:?}", o.unique_id);
             let _ = tx.send(Message::DiscoveryItem(o));
@@ -449,9 +452,6 @@ fn set_ui(ref mut ui: conrod::UiCell,
                     if list[i].1 != v {
                         let mut controller = weecontrol.lock().unwrap();
                         let new_state = if v { State::On } else { State::Off };
-
-                        info!("list[{}]={:?}. v={:?}", i, list[i].1, v);
-
                         let res = controller.set_binary_state(&list[i].0.unique_id, new_state);
                         match res {
                             Ok(_) => list[i].1 = v,

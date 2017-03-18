@@ -27,3 +27,4 @@ mod device;
 mod xml;
 mod cache;
 mod rpc;
+mod server;

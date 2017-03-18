@@ -165,7 +165,8 @@ impl Device {
                            initial_seconds: u32,
                            callback: String) {
         use std::sync::mpsc::TryRecvError;
-        use hyper::status::StatusCode;
+        use hyper::StatusCode;
+
         let mut duration = time::Duration::from_secs((initial_seconds - 10) as u64);
 
         loop {

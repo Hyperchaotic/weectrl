@@ -1,6 +1,6 @@
 [package]
 name = "weectrl"
-version = "0.4.4"
+version = "0.5.0"
 authors = ["Klaus Nielsen <hyperchaotic@gmail.com>"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
@@ -13,7 +13,7 @@ slog-stream = "1.2.0"
 chrono = "0.2.25"
 ssdp = "0.5.0"
 time = "0.1"
-hyper = "0.10.0"
+#hyper = "0.10.0"
 serde = "0.8.22"
 serde_xml = "0.9.1"
 serde_json = "0.8"
@@ -21,7 +21,11 @@ serde_derive = "0.8.22"
 app_dirs = "1.1.1"
 url = "1.2.4"
 tokio-core = "0.1.4"
+tokio-timer = "0.1.0"
 futures = "0.1.10"
+
+[dependencies.hyper]
+git = "https://github.com/hyperium/hyper.git"
 
 [dev-dependencies]
 image = "0.12.2"
