@@ -622,6 +622,7 @@ impl WeeController {
                 request.set(MX(mx));
                 request.set(ST::Target(ssdp::FieldMap::UPnP(String::from("rootdevice"))));
 
+                use weectrl::ssdp::message::Multicast;
                 // Iterate over network responses to our broadcast.
                 if let Some(reqs) = request.multicast().ok() {
                     for (msg, _) in reqs {

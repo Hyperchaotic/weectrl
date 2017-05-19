@@ -1,6 +1,6 @@
 [package]
 name = "weectrl"
-version = "0.5.0"
+version = "0.5.1"
 authors = ["Klaus Nielsen <hyperchaotic@gmail.com>"]
 license = "MIT/Apache-2.0"
 readme = "README.md"
@@ -15,8 +15,9 @@ slog = "1.4.1"
 slog-scope = "0.2.2"
 slog-stdlog = "1.1.0"
 slog-stream = "1.2.0"
-chrono = "0.2.25"
-ssdp = "0.5.0"
+
+chrono = "0.3.1"
+ssdp = "0.6.0"
 time = "0.1"
 #hyper = "0.10.0"
 serde = "0.8.22"

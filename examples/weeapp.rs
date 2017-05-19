@@ -430,10 +430,11 @@ fn set_ui(ref mut ui: conrod::UiCell,
     }
 
     if *app_state == AppState::Ready || (*app_state == AppState::Discovering && !list.is_empty()) {
-        let (mut items, scrollbar) = widget::List::new(list.len(), ITEM_HEIGHT)
+        let (mut items, scrollbar) = widget::List::flow_down(list.len())
+            .item_size(ITEM_HEIGHT)
             .scrollbar_on_top()
             .scrollbar_color(conrod::color::BLUE)
-            .scrollbar_width(15.0)
+            .scrollbar_thickness(15.0)
             .middle_of(ids.list_canvas)
             .wh_of(ids.list_canvas)
             .set(ids.list, ui);
