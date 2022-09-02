@@ -1,5 +1,7 @@
-use serde_xml;
-pub use error::Error;
+pub use crate::error::Error;
+
+use serde::Deserialize;
+use serde_xml_rs;
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename = "service")]
@@ -20,10 +22,10 @@ pub struct Service {
 #[serde(rename = "icon")]
 pub struct Icon {
     pub mimetype: String, // >jpg</mimetype>
-    pub width: String, // >100</width>
-    pub height: String, // >100</height>
-    pub depth: String, // >100</depth>
-    pub url: String, // >icon.jpg</url>
+    pub width: String,    // >100</width>
+    pub height: String,   // >100</height>
+    pub depth: String,    // >100</depth>
+    pub url: String,      // >icon.jpg</url>
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -94,12 +96,11 @@ pub struct Root {
 }
 
 pub fn parse_services(data: &str) -> Result<Root, Error> {
-    let r: Root = serde_xml::de::from_str(data)?;
+    let r: Root = serde_xml_rs::de::from_str(data)?;
     Ok(r)
 }
 
 pub fn get_binary_state(data: &str) -> Option<u8> {
-
     if data.contains("<BinaryState>1</BinaryState>") {
         return Some(1);
     } else if data.contains("<BinaryState>0</BinaryState>") {
@@ -108,8 +109,7 @@ pub fn get_binary_state(data: &str) -> Option<u8> {
     None
 }
 
-pub const SETBINARYSTATEOFF: &'static str =
-    "<?xml version=\"1.0\" encoding=\"utf-8\"?>
+pub const SETBINARYSTATEOFF: &'static str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>
 <s:Envelope \
      xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" \
      s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">
@@ -122,8 +122,7 @@ pub const SETBINARYSTATEOFF: &'static str =
   </s:Body>
 </s:Envelope>";
 
-pub const SETBINARYSTATEON: &'static str =
-    "<?xml version=\"1.0\" encoding=\"utf-8\"?>
+pub const SETBINARYSTATEON: &'static str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>
 <s:Envelope \
      xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" \
      s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">
@@ -136,8 +135,7 @@ pub const SETBINARYSTATEON: &'static str =
   </s:Body>
 </s:Envelope>";
 
-pub const GETBINARYSTATE: &'static str =
-    "
+pub const GETBINARYSTATE: &'static str = "
 <?xml version=\"1.0\" encoding=\"utf-8\"?>
 <s:Envelope \
      xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" \

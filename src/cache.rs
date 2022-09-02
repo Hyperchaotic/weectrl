@@ -1,32 +1,28 @@
+extern crate directories;
+use directories::ProjectDirs;
 
+use tracing::info;
 
-extern crate app_dirs;
-extern crate serde_json;
+use serde::{Deserialize, Serialize};
+use serde_json;
 
 use std;
 
-use std::io::prelude::*;
 use std::fs::File;
+use std::io::prelude::*;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DeviceAddress {
     pub location: String,
     pub mac_address: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct CacheData {
     pub cache: Vec<DeviceAddress>,
 }
 
-use self::app_dirs::*;
-
 const CACHE_FILE: &'static str = "IPCache.dat";
-
-const APP_INFO: AppInfo = AppInfo {
-    name: "WeeApp",
-    author: "hyperchaotic",
-};
 
 /// Disk cache of IP addresses of WeMo devices
 /// WeMo doesn't always answer broadcast upnp, this cache allows
@@ -38,34 +34,40 @@ pub struct DiskCache {
 impl DiskCache {
     pub fn new() -> DiskCache {
         let mut file_path: Option<std::path::PathBuf> = None;
-        if let Ok(mut path) = app_root(AppDataType::UserCache, &APP_INFO) {
+
+        if let Some(proj_dirs) = ProjectDirs::from("", "", "WeeCtrl") {
+            let mut path = proj_dirs.config_dir().to_path_buf();
             path.push(CACHE_FILE);
             file_path = Some(path);
+            info!("Cache file: {:#?}", file_path);
         }
-        DiskCache { cache_file: file_path }
+        DiskCache {
+            cache_file: file_path,
+        }
     }
 
     /// Write data to cache, errors ignored
     pub fn write(&self, addresses: Vec<DeviceAddress>) {
-
         if let Some(ref fpath) = self.cache_file {
             let data = CacheData { cache: addresses };
+            if let Some(prefix) = fpath.parent() {
+                let _ = std::fs::create_dir_all(prefix);
 
-            if let Ok(serialized) = serde_json::to_string(&data) {
-                if let Ok(mut buffer) = File::create(fpath) {
-                    let _ = buffer.write_all(&serialized.into_bytes());
+                if let Ok(serialized) = serde_json::to_string(&data) {
+                    if let Ok(mut buffer) = File::create(fpath) {
+                        let _ = buffer.write_all(&serialized.into_bytes());
+                    }
                 }
             }
         }
     }
 
     pub fn read(&self) -> Option<Vec<DeviceAddress>> {
-
         if let Some(ref fpath) = self.cache_file {
             if let Ok(mut file) = File::open(fpath) {
                 let mut s = String::new();
                 let _ = file.read_to_string(&mut s);
-                let cachedata: Option<CacheData> = serde_json::de::from_str(&s).ok();
+                let cachedata: Option<CacheData> = serde_json::from_str(&s).ok();
                 if let Some(data) = cachedata {
                     return Some(data.cache);
                 }

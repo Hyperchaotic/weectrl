@@ -1,16 +1,14 @@
-extern crate slog_scope;
-extern crate ssdp;
-
 use std::net::IpAddr;
-use std::{thread, time};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+use std::{thread, time};
+use tracing::info;
 
-use weectrl::{DeviceInfo, State, Icon};
-use rpc;
-use xml;
-use error;
-use error::Error;
+use crate::error;
+use crate::error::Error;
+use crate::rpc;
+use crate::weectrl::{DeviceInfo, Icon, State};
+use crate::xml;
 
 #[derive(Debug, Clone)]
 /// One WeMo or similar device
@@ -39,11 +37,10 @@ impl Device {
             subscription_daemon: None,
             info: info,
         };
-        info!(slog_scope::logger(),
-              "New device {}, {} @ {}",
-              dev.info.root.device.friendly_name,
-              dev.info.root.device.mac_address,
-              dev.info.base_url);
+        info!(
+            "New device {}, {} @ {}",
+            dev.info.root.device.friendly_name, dev.info.root.device.mac_address, dev.info.base_url
+        );
         dev
     }
 
@@ -69,21 +66,9 @@ impl Device {
         false
     }
 
-    /// Print basic information to logger
-    pub fn print_info(&self) {
-        info!(slog_scope::logger(),
-              "Friendly name: {:?}. State: {:?}. Location: {:?}. Services: ",
-              self.info.root.device.friendly_name,
-              self.info.state,
-              self.info.location);
-
-        for service in &self.info.root.device.service_list.service {
-            info!(slog_scope::logger(), "    - {:?}", service.service_type);
-        }
-    }
-
     fn cancel_subscription_daemon(&mut self) {
         if let Some(daemon) = self.subscription_daemon.clone() {
+            info!("Cancel subscription daemon");
             let _ = daemon.send(());
             self.subscription_daemon = None;
         }
@@ -91,7 +76,7 @@ impl Device {
 
     /// Send unsubscribe command and cancel the daemon if active.
     pub fn unsubscribe(&mut self) -> Result<String, Error> {
-
+        info!("UnSubscribe");
         self.cancel_subscription_daemon();
 
         if let Some(sid_shared) = self.sid.clone() {
@@ -110,7 +95,7 @@ impl Device {
         if let Some(ref path) = *req_path {
             let mut req_url = base_url.to_owned();
             if req_url.ends_with('/') && path.starts_with('/') {
-                req_url = req_url.trim_right_matches('/').to_owned();
+                req_url = req_url.trim_end_matches('/').to_owned();
             }
             req_url.push_str(path);
             return Ok(req_url);
@@ -119,14 +104,14 @@ impl Device {
     }
 
     /// Send subscribe comand, cancel any currrent daemon and start a new if auto resub on.
-    pub fn subscribe(&mut self,
-                     port: u16,
-                     seconds: u32,
-                     auto_resubscribe: bool)
-                     -> Result<(String, u32), Error> {
-
+    pub fn subscribe(
+        &mut self,
+        port: u16,
+        seconds: u32,
+        auto_resubscribe: bool,
+    ) -> Result<(String, u32), Error> {
+        info!("Subscribe");
         let callback = format!("<http://{}:{}/>", self.local_ip, port);
-
         let req_url = Device::make_request_url(&self.info.base_url, &self.event_path)?;
         self.cancel_subscription_daemon();
         let res = rpc::subscribe(&req_url, seconds, &callback)?;
@@ -145,27 +130,14 @@ impl Device {
         Ok((res.sid, res.timeout))
     }
 
-    /// Resubscribe for notifications. This will cancel auto resubscribe is active.
-    pub fn resubscribe(&mut self, seconds: u32) -> Result<u32, Error> {
-
-        self.cancel_subscription_daemon();
-
-        if let Some(sid_shared) = self.sid.clone() {
-            let sid = sid_shared.lock().expect(error::FATAL_LOCK).clone();
-            let req_url = Device::make_request_url(&self.info.base_url, &self.event_path)?;
-            let res = rpc::resubscribe(&req_url, &sid, seconds)?;
-            return Ok(res.timeout);
-        }
-        Err(Error::NotSubscribed)
-    }
-
-    fn subscription_daemon(rx: mpsc::Receiver<()>,
-                           url: String,
-                           device_sid: Arc<Mutex<String>>,
-                           initial_seconds: u32,
-                           callback: String) {
+    fn subscription_daemon(
+        rx: mpsc::Receiver<()>,
+        url: String,
+        device_sid: Arc<Mutex<String>>,
+        initial_seconds: u32,
+        callback: String,
+    ) {
         use std::sync::mpsc::TryRecvError;
-        use hyper::StatusCode;
 
         let mut duration = time::Duration::from_secs((initial_seconds - 10) as u64);
 
@@ -176,45 +148,26 @@ impl Device {
                 Err(TryRecvError::Empty) => (),
                 _ => break,
             }
-            let sid: String;
-            {
-                sid = device_sid.lock().expect(error::FATAL_LOCK).clone();
-            }
-            match rpc::resubscribe(&url, &sid, initial_seconds) {
-                // Resub successful, register new timeout and SID
+            info!("Resubscribing.");
+            match rpc::subscribe(&url, initial_seconds, &callback) {
                 Ok(res) => {
                     duration = time::Duration::from_secs((res.timeout - 10) as u64);
                     let mut sid_ref = device_sid.lock().expect(error::FATAL_LOCK);
                     sid_ref.clear();
                     sid_ref.push_str(&res.sid);
                 }
-                // We were too late (perhaps computer was asleep). Subscribe anew.
-                Err(Error::InvalidResponse(StatusCode::PreconditionFailed)) => {
-                    match rpc::subscribe(&url, initial_seconds, &callback) {
-                        Ok(res) => {
-                            duration = time::Duration::from_secs((res.timeout - 10) as u64);
-                            let mut sid_ref = device_sid.lock().expect(error::FATAL_LOCK);
-                            sid_ref.clear();
-                            sid_ref.push_str(&res.sid);
-                        }
-                        Err(_) => break,
-                    };
-                }
-                // Any other error, give up
                 Err(_) => break,
-            }
+            };
         }
     }
 
     /// Retrieve current switch binarystate.
     pub fn fetch_icons(&mut self) -> Result<Vec<Icon>, Error> {
-
         let mut icon_list = Vec::new();
 
         self.info.state = State::Unknown;
 
         for xmlicon in &self.info.root.device.icon_list.icon {
-
             let width = xmlicon.width.parse::<u64>()?;
             let height = xmlicon.height.parse::<u64>()?;
             let depth = xmlicon.depth.parse::<u64>()?;
@@ -237,14 +190,15 @@ impl Device {
 
     /// Retrieve current switch binarystate.
     pub fn fetch_binary_state(&mut self) -> Result<State, Error> {
-
         self.info.state = State::Unknown;
 
         let req_url = Device::make_request_url(&self.info.base_url, &self.binary_control_path)?;
 
-        let http_response = rpc::soap_action(&req_url,
-                                             "\"urn:Belkin:service:basicevent:1#GetBinaryState\"",
-                                             xml::GETBINARYSTATE)?;
+        let http_response = rpc::soap_action(
+            &req_url,
+            "\"urn:Belkin:service:basicevent:1#GetBinaryState\"",
+            xml::GETBINARYSTATE,
+        )?;
 
         if let Some(state) = xml::get_binary_state(&http_response) {
             self.info.state = State::from(state);
@@ -257,7 +211,6 @@ impl Device {
 
     /// Send command to toggle switch state. If toggeling to same state an Error is returned.
     pub fn set_binary_state(&mut self, state: State) -> Result<State, Error> {
-
         let request: &str;
         match state {
             State::On => request = xml::SETBINARYSTATEON,
@@ -265,9 +218,11 @@ impl Device {
             State::Unknown => return Err(Error::InvalidState),
         }
         let req_url = Device::make_request_url(&self.info.base_url, &self.binary_control_path)?;
-        let _ = rpc::soap_action(&req_url,
-                                 "\"urn:Belkin:service:basicevent:1#SetBinaryState\"",
-                                 request)?;
+        let _ = rpc::soap_action(
+            &req_url,
+            "\"urn:Belkin:service:basicevent:1#SetBinaryState\"",
+            request,
+        )?;
 
         self.info.state = state;
         Ok(state)

@@ -1,587 +1,556 @@
 // On Windows don't create terminal window when opening app in GUI
-#![feature(windows_subsystem)]
+
 #![windows_subsystem = "windows"]
 
 extern crate weectrl;
-extern crate chrono;
-extern crate app_dirs;
 
-#[macro_use(slog_info, slog_log, o)]
-extern crate slog;
-
-#[macro_use]
-extern crate slog_scope;
-extern crate slog_stream;
-
-extern crate futures;
-extern crate tokio_core;
-
-use futures::stream::Stream;
-use tokio_core::reactor::Core;
-
-use slog::DrainExt;
-use app_dirs::*;
-
-use std::io;
-use std::fs::OpenOptions;
+use tracing::info;
+use tracing_subscriber;
 
 use weectrl::*;
 
-#[macro_use]
-extern crate conrod;
-extern crate image;
+use fltk::{enums::Event, image::PngImage, prelude::*, *};
+use fltk_theme::widget_schemes::fluent::colors::*;
+use fltk_theme::{SchemeType, WidgetScheme};
+use std::collections::HashMap;
 
-use conrod::backend::glium::glium;
-use conrod::backend::glium::glium::{DisplayBuild, Surface};
+extern crate directories;
+use directories::ProjectDirs;
 
-use conrod::{Borderable, color};
+use serde::{Deserialize, Serialize};
+use serde_json;
 
-use std::sync::{Arc, Mutex, mpsc};
+use std;
 
-use std::thread;
+use std::fs::File;
+use std::io::prelude::*;
 
-widget_ids! {
-    struct Ids { canvas, top_bar, list_canvas, list,
-        button_clear, button_refresh, refresh_image, clear_image, wait_label,
-    notify_canvas, notify_button, notify_label, scanning_label }
+#[derive(Debug, Clone)]
+enum Message {
+    Resize(Settings),
+    Reload,
+    Clear,
+    StartDiscovery,
+    EndDiscovery,
+    AddButton(DeviceInfo),
+    Notification(StateNotification),
+    Clicked(DeviceInfo),
 }
+
+struct WeeApp {
+    app: app::App,
+    main_win: window::Window,
+    inner_win: window::Window,
+    scroll: group::Scroll,
+    pack: group::Pack,
+    reloading_frame: frame::Frame,
+    sender: app::Sender<Message>,
+    receiver: app::Receiver<Message>,
+    controller: WeeController,
+    discovering: bool,                        // Is dicover currently in progress?
+    buttons: HashMap<String, button::Button>, // List of deviceID's and indexes of the associated buttons
+}
+
+const SETTINGS_FILE: &'static str = "Settings.dat";
 
 const SUBSCRIPTION_DURATION: u32 = 180;
-const WINDOW_WIDTH: u32 = 400;
-const TOP_BAR_HEIGHT: u32 = 40;
-const LIST_WIDTH: u32 = WINDOW_WIDTH - 80;
-const LIST_HEIGHT: u32 = 220;
-const WINDOW_HEIGHT: u32 = LIST_HEIGHT + TOP_BAR_HEIGHT + 40;
+const SUBSCRIPTION_AUTO_RENEW: bool = true;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum AppState {
-    Initializing,
-    StartDiscovery,
-    Discovering,
-    Ready,
-    NoDevices,
-}
+const UNIT_SPACING: i32 = 40;
+const WINDOW_WIDTH: i32 = 400;
+const TOP_BAR_HEIGHT: i32 = UNIT_SPACING + 10;
+const LIST_WIDTH: i32 = WINDOW_WIDTH - 80;
+const LIST_HEIGHT: i32 = 220;
+const WINDOW_HEIGHT: i32 = LIST_HEIGHT + TOP_BAR_HEIGHT + UNIT_SPACING;
+const SCROLL_WIDTH: i32 = 15;
 
-struct NotificationDialog {
-    pub is_open: bool,
-    pub message: String,
-}
+const BUTTON_ON_COLOR: enums::Color = enums::Color::from_rgb(114, 159, 207);
+const BUTTON_OFF_COLOR: enums::Color = enums::Color::from_rgb(13, 25, 38);
 
-const LOG_FILE: &'static str = "WeeController.log";
+const RL_BTN1: &[u8] = include_bytes!("images/refresh_b.png");
+const RL_BTN2: &[u8] = include_bytes!("images/refresh_press_b.png");
+const RL_BTN3: &[u8] = include_bytes!("images/refresh_hover_b.png");
 
-const APP_INFO: AppInfo = AppInfo {
-    name: "WeeApp",
-    author: "hyperchaotic",
-};
+const CL_BTN1: &[u8] = include_bytes!("images/clear.png");
+const CL_BTN2: &[u8] = include_bytes!("images/clear_press.png");
+const CL_BTN3: &[u8] = include_bytes!("images/clear_hover.png");
 
-#[derive(Debug)]
-enum Message {
-    Event(conrod::event::Input),
-    DiscoveryItem(DeviceInfo),
-    DiscoveryEnded,
-    NotificationsStarted,
-    Notification(StateNotification),
-}
+const CLEAR_TOOLTIP: &str = "Forget all devices and clear the on-disk list of known devices.";
+const RELOAD_TOOLTIP: &str =
+    "Reload list of devices from on-disk list (if any) and then by network query.";
 
-struct ImageIds {
-    refresh_normal: conrod::image::Id,
-    refresh_press: conrod::image::Id,
-    refresh_hover: conrod::image::Id,
-    clear_normal: conrod::image::Id,
-    clear_press: conrod::image::Id,
-    clear_hover: conrod::image::Id,
-}
+impl WeeApp {
+    pub fn new() -> Self {
+        let app = app::App::default();
+        app::background(0, 0, 0);
+        app::background2(0x00, 0x00, 0x00);
+        app::foreground(0xff, 0xff, 0xff);
+        app::set_color(
+            enums::Color::Selection,
+            SELECTION_COLOR.0,
+            SELECTION_COLOR.1,
+            SELECTION_COLOR.2,
+        );
 
-fn start_discovery_async(tx: mpsc::Sender<Message>, ctrl: Arc<Mutex<WeeController>>) {
+        let theme = WidgetScheme::new(SchemeType::Fluent);
+        theme.apply();
 
-    thread::spawn(move || {
-        info!("Discovery Thread: Start discovery");
+        app::set_font_size(18);
 
-        let mut core = Core::new().unwrap();
+        let (s, receiver) = app::channel();
 
-        let discovery;
-        {
-            let mut controller = ctrl.lock().unwrap();
-            discovery = controller.discover_future(DiscoveryMode::CacheAndBroadcast, true, 3);
-        }
-        let processor = discovery.for_each(|o| {
-            info!(" Got device {:?}", o.unique_id);
-            let _ = tx.send(Message::DiscoveryItem(o));
-            Ok(())
+        let mut main_win = window::Window::default()
+            .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
+            .with_label("WeeApp 0.9 (beta)");
+        main_win.set_color(enums::Color::Gray0);
+
+        let mut image_clear = PngImage::from_data(CL_BTN1).unwrap();
+        image_clear.scale(50, 50, true, true);
+
+        let mut image_clear_click = PngImage::from_data(CL_BTN2).unwrap();
+        image_clear_click.scale(50, 50, true, true);
+
+        let mut image_clear_hover = PngImage::from_data(CL_BTN3).unwrap();
+        image_clear_hover.scale(50, 50, true, true);
+
+        let mut btn_clear = button::Button::default().with_size(50, 50);
+        btn_clear.set_frame(enums::FrameType::FlatBox);
+        btn_clear.set_pos(WINDOW_WIDTH - UNIT_SPACING - 10 - UNIT_SPACING - 10, 0);
+        btn_clear.set_image(Some(image_clear.clone()));
+
+        let ic = image_clear.clone();
+        let icc = image_clear_click.clone();
+        let ich = image_clear_hover.clone();
+        btn_clear.emit(s.clone(), Message::Clear);
+        btn_clear.set_tooltip(CLEAR_TOOLTIP);
+
+        btn_clear.handle(move |b, e| match e {
+            enums::Event::Enter => {
+                b.set_image(Some(ich.clone()));
+                b.redraw();
+                true
+            }
+            enums::Event::Released => {
+                b.set_image(Some(ich.clone()));
+                b.redraw();
+                true
+            }
+            enums::Event::Leave => {
+                b.set_image(Some(ic.clone()));
+                b.redraw();
+                true
+            }
+            enums::Event::Push => {
+                b.set_image(Some(icc.clone()));
+                true
+            }
+            _ => false,
         });
 
-        core.run(processor).unwrap();
-        let _ = tx.send(Message::DiscoveryEnded);
-        info!("Discovery Thread: Ended.");
-    });
-}
+        let mut image_reload = PngImage::from_data(RL_BTN1).unwrap();
+        image_reload.scale(50, 50, true, true);
 
-fn start_notification_listener(tx: mpsc::Sender<Message>, ctrl: Arc<Mutex<WeeController>>) {
+        let mut image_reload_click = PngImage::from_data(RL_BTN2).unwrap();
+        image_reload_click.scale(50, 50, true, true);
 
-    thread::spawn(move || {
-        let notifications;
-        {
-            let mut controller = ctrl.lock().unwrap();
-            notifications = controller.subscription_future().ok();
+        let mut image_reload_hover = PngImage::from_data(RL_BTN3).unwrap();
+        image_reload_hover.scale(50, 50, true, true);
+
+        let mut btn_reload = button::Button::default().with_size(50, 50);
+        btn_reload.set_frame(enums::FrameType::FlatBox);
+        btn_reload.set_pos(WINDOW_WIDTH - UNIT_SPACING - 10, 0);
+        btn_reload.set_image(Some(image_reload.clone()));
+
+        let ir = image_reload.clone();
+        let irc = image_reload_click.clone();
+        let irh = image_reload_hover.clone();
+        btn_reload.set_tooltip(RELOAD_TOOLTIP);
+        btn_reload.emit(s.clone(), Message::Reload);
+
+        btn_reload.handle(move |b, e| match e {
+            enums::Event::Enter => {
+                b.set_image(Some(irh.clone()));
+                b.redraw();
+                true
+            }
+            enums::Event::Released => {
+                b.set_image(Some(irh.clone()));
+                b.redraw();
+                true
+            }
+            enums::Event::Leave => {
+                b.set_image(Some(ir.clone()));
+                b.redraw();
+                true
+            }
+            enums::Event::Push => {
+                b.set_image(Some(irc.clone()));
+                true
+            }
+            _ => false,
+        });
+
+        let mut inner_win = window::Window::default()
+            .with_label("TEST RESIZE")
+            .with_size(LIST_WIDTH, LIST_HEIGHT);
+
+        inner_win.set_pos(UNIT_SPACING, TOP_BAR_HEIGHT);
+        inner_win.set_frame(enums::FrameType::BorderBox);
+        inner_win.set_color(enums::Color::BackGround | enums::Color::from_hex(0x2e3436));
+
+        let mut scroll = group::Scroll::default().size_of_parent();
+        scroll.set_frame(enums::FrameType::BorderBox);
+        scroll.set_type(group::ScrollType::Vertical);
+        scroll.make_resizable(false);
+        scroll.set_color(enums::Color::BackGround | enums::Color::from_hex(0x2e3436));
+        scroll.set_scrollbar_size(SCROLL_WIDTH);
+
+        let mut pack = group::Pack::new(0, 0, LIST_WIDTH - 15, LIST_HEIGHT, "GGGG");
+        pack.set_type(group::PackType::Vertical);
+        pack.set_spacing(2);
+        pack.set_color(enums::Color::BackGround | enums::Color::Red);
+
+        pack.end();
+
+        inner_win.end();
+        main_win.end();
+
+        let mut reloading_frame = frame::Frame::default().with_size(100, UNIT_SPACING);
+        reloading_frame.set_pos(10, WINDOW_HEIGHT - UNIT_SPACING);
+        reloading_frame.set_color(enums::Color::Black);
+        reloading_frame.set_label_color(enums::Color::Yellow);
+
+        main_win.add(&reloading_frame);
+
+        let mut sc = scroll.clone();
+        let mut fr = inner_win.clone();
+        let mut pa = pack.clone();
+        let mut reload = btn_reload.clone();
+        let mut clear = btn_clear.clone();
+        let mut rlfr = reloading_frame.clone();
+
+        let mut controller = WeeController::new();
+
+        main_win.handle(move |w, ev| match ev {
+            enums::Event::Hide => {
+                //controller.unsubscribe_all();
+                let settings = Settings {
+                    x: w.x(),
+                    y: w.y(),
+                    w: w.w(),
+                    h: w.h(),
+                };
+
+                info!("Quitting. Saving Window: {:#?}", settings);
+
+                let storage = Storage::new();
+                storage.write(settings);
+                true
+            }
+
+            enums::Event::Resize => {
+                info!(
+                    "enums::Event::Resize {:?} {:?} {:?} {:?}",
+                    w.x(),
+                    w.y(),
+                    w.w(),
+                    w.h()
+                );
+                fr.resize(
+                    UNIT_SPACING,
+                    TOP_BAR_HEIGHT,
+                    w.w() - 2 * UNIT_SPACING,
+                    w.h() - 2 * UNIT_SPACING,
+                );
+                pa.resize(
+                    0,
+                    0,
+                    w.w() - 2 * UNIT_SPACING - 15,
+                    w.h() - 2 * UNIT_SPACING,
+                );
+                sc.resize(0, 0, w.w() - 2 * UNIT_SPACING, w.h() - 2 * UNIT_SPACING);
+
+                reload.set_size(50, 50);
+                reload.set_pos(w.w() - UNIT_SPACING - 10, 0);
+
+                clear.set_size(50, 50);
+                clear.set_pos(w.w() - UNIT_SPACING - 10 - UNIT_SPACING - 10, 0);
+
+                rlfr.set_size(100, UNIT_SPACING);
+                rlfr.set_pos(10, w.h() - UNIT_SPACING);
+
+                true
+            }
+            _ => false,
+        });
+
+        main_win.make_resizable(true);
+
+        let rx = controller.start_subscription_service().unwrap();
+        let sc = s.clone();
+
+        let _ = std::thread::spawn(move || {
+            while let Ok(n) = rx.recv() {
+                let _ = sc.send(Message::Notification(n.clone()));
+            }
+        });
+
+        main_win.show();
+
+        s.send(Message::StartDiscovery);
+
+        let storage = Storage::new();
+        if let Some(settings) = storage.read() {
+            s.send(Message::Resize(settings));
         }
-        // This message causes the UI to draw first time.
-        let _ = tx.send(Message::NotificationsStarted);
-        if let Some(notifications) = notifications {
-            let mut core = Core::new().unwrap();
-            let processor = notifications.for_each(|n| {
-                let _ = tx.send(Message::Notification(n));
-                Ok(())
-            });
-            core.run(processor).unwrap();
+
+        Self {
+            app: app,
+            main_win: main_win,
+            inner_win: inner_win,
+            pack: pack,
+            scroll: scroll,
+            reloading_frame: reloading_frame,
+            sender: s,
+            receiver: receiver,
+            controller: controller,
+            discovering: true,
+            buttons: HashMap::new(),
         }
-    });
+    }
+
+    pub fn run(mut self) {
+        while self.app.wait() {
+            if let Some(msg) = self.receiver.recv() {
+                match msg {
+                    Message::Resize(settings) => {
+                        info!("Resizing application window: {:#?}", settings);
+                        self.main_win
+                            .resize(settings.x, settings.y, settings.w, settings.h);
+                        self.app.redraw();
+                    }
+                    Message::Clear => {
+                        if !self.discovering {
+                            info!("Message::Clear");
+                            self.controller.clear(true);
+                            self.buttons.clear();
+
+                            for _i in 0..self.pack.children() {
+                                let wgt = self.pack.child(0).unwrap();
+                                self.pack.remove_by_index(0);
+                                fltk::app::delete_widget(wgt);
+                            }
+                            self.scroll.redraw();
+                        }
+                    }
+                    Message::Reload => {
+                        if !self.discovering {
+                            info!("Message::Reload");
+                            self.controller.clear(false);
+                            self.buttons.clear();
+
+                            for _i in 0..self.pack.children() {
+                                let wgt = self.pack.child(0).unwrap();
+                                self.pack.remove_by_index(0);
+                                fltk::app::delete_widget(wgt);
+                            }
+
+                            self.sender.send(Message::StartDiscovery);
+                        }
+                    }
+
+                    Message::AddButton(device) => {
+                        info!(
+                            "Message::AddButton {:?} {:?}",
+                            device.unique_id, device.friendly_name
+                        );
+                        let _ = self.controller.subscribe(
+                            &device.unique_id,
+                            SUBSCRIPTION_DURATION,
+                            SUBSCRIPTION_AUTO_RENEW,
+                        );
+
+                        let mut but = button::Button::default()
+                            .with_size(0, UNIT_SPACING)
+                            .with_label(&format!("{:?}", device.friendly_name));
+                        if device.state == State::On {
+                            but.set_color(BUTTON_ON_COLOR);
+                        } else {
+                            but.set_color(BUTTON_OFF_COLOR);
+                        }
+
+                        but.handle(move |b, e| match e {
+                            enums::Event::Enter => {
+                                b.set_frame(enums::FrameType::DiamondUpBox);
+                                b.redraw();
+                                true
+                            }
+                            enums::Event::Leave => {
+                                b.set_frame(enums::FrameType::UpBox);
+                                b.redraw();
+                                true
+                            }
+                            _ => false,
+                        });
+
+                        but.emit(self.sender.clone(), Message::Clicked(device.clone()));
+
+                        self.buttons.insert(device.unique_id, but.clone());
+                        self.pack.add(&but);
+
+                        self.pack.redraw();
+                        self.scroll.redraw();
+
+                        // It only shows the buttons if I do this, TODO figure out why...
+                        self.main_win
+                            .set_size(self.main_win.w(), self.main_win.h() + 5);
+                        self.main_win.redraw();
+                        self.main_win
+                            .set_size(self.main_win.w(), self.main_win.h() - 5);
+                        self.main_win.redraw();
+                    }
+
+                    Message::Clicked(device) => {
+                        info!(
+                            "Message::Clicked {:?} {:?}",
+                            device.unique_id, device.friendly_name
+                        );
+                        if let Some(btn) = self.buttons.get(&device.unique_id) {
+                            let state = if btn.color() == BUTTON_ON_COLOR {
+                                State::Off
+                            } else {
+                                State::On
+                            };
+
+                            if let Ok(ret_state) =
+                                self.controller.set_binary_state(&device.unique_id, state)
+                            {
+                                if ret_state == State::On {
+                                    btn.clone().set_color(BUTTON_ON_COLOR);
+                                } else {
+                                    btn.clone().set_color(BUTTON_OFF_COLOR);
+                                }
+                            }
+                        }
+                    }
+
+                    Message::StartDiscovery => {
+                        info!("Message::StartDiscovery");
+                        self.discovering = true;
+                        self.reloading_frame.set_label("Searching...");
+                        let s = self.sender.clone();
+
+                        let rx = self.controller.discover_async(
+                            DiscoveryMode::CacheAndBroadcast,
+                            false,
+                            5,
+                        );
+                        std::thread::spawn(move || {
+                            loop {
+                                let msg = rx.recv();
+                                info!("Discover thread forwarding");
+                                match msg {
+                                    Ok(dev) => s.send(Message::AddButton(dev)),
+                                    Err(_) => {
+                                        s.send(Message::EndDiscovery);
+                                        break; // End thread
+                                    }
+                                }
+                            }
+                        });
+                    }
+
+                    Message::EndDiscovery => {
+                        info!("Message::EndDiscovery");
+                        self.discovering = false;
+                        self.reloading_frame.set_label("");
+                    }
+                    Message::Notification(n) => {
+                        info!("Message::Notification: {:?} {:?}", n.unique_id, n.state);
+                        if let Some(btn) = self.buttons.get(&n.unique_id) {
+                            if n.state == State::On {
+                                btn.clone().set_color(BUTTON_ON_COLOR);
+                            } else {
+                                btn.clone().set_color(BUTTON_OFF_COLOR);
+                            }
+
+                            self.main_win.redraw();
+                            self.app.redraw()
+                        }
+                    }
+                }
+            }
+        }
+        self.app.redraw()
+    }
 }
 
 fn main() {
-    // get path for logfile: %USERPROFILE%\AppData\Local\hyperchaotic\WeeApp\WeeController.log
-    //                   or: $HOME/.cache/WeeApp/WeeController.log
-    let mut log_path = String::from(LOG_FILE);
-    if let Ok(mut path) = app_root(AppDataType::UserCache, &APP_INFO) {
-        path.push(LOG_FILE);
-        if let Some(st) = path.to_str() {
-            log_path = st.to_owned();
-        }
-    }
-    // Create logger
-    let file = OpenOptions::new().create(true).write(true).truncate(true).open(log_path).unwrap();
-    let drain = slog_stream::stream(file, MyFormat).fuse();
-    let logger = slog::Logger::root(drain, o!());
-    slog_scope::set_global_logger(logger.clone());
+    // install global collector configured based on RUST_LOG env var.
+    tracing_subscriber::fmt::init();
 
-    info!("Starting up");
-
-    // Include resources in binary to avoid problems with missing files
-    let refresh_image_bytes = include_bytes!("../assets/images/refresh.png");
-    let clear_image_bytes = include_bytes!("../assets/images/clear.png");
-    let refresh_press_image_bytes = include_bytes!("../assets/images/refresh_press.png");
-    let clear_press_image_bytes = include_bytes!("../assets/images/clear_press.png");
-    let refresh_hover_image_bytes = include_bytes!("../assets/images/refresh_hover.png");
-    let clear_hover_image_bytes = include_bytes!("../assets/images/clear_hover.png");
-
-    // Build the window.
-    let display = glium::glutin::WindowBuilder::new()
-        .with_vsync()
-        .with_dimensions(WINDOW_WIDTH as u32, WINDOW_HEIGHT as u32)
-        .with_title("Wee Controller")
-        .build_glium()
-        .unwrap();
-
-    let mut image_map = conrod::image::Map::new();
-
-    let image_ids = ImageIds {
-        refresh_normal: image_map.insert(load_image(refresh_image_bytes, &display)),
-        refresh_press: image_map.insert(load_image(refresh_press_image_bytes, &display)),
-        refresh_hover: image_map.insert(load_image(refresh_hover_image_bytes, &display)),
-        clear_normal: image_map.insert(load_image(clear_image_bytes, &display)),
-        clear_press: image_map.insert(load_image(clear_press_image_bytes, &display)),
-        clear_hover: image_map.insert(load_image(clear_hover_image_bytes, &display)),
-    };
-
-    // Construct our `Ui`.
-    let mut renderer = conrod::backend::glium::Renderer::new(&display).unwrap();
-
-    // A channel to send events from the main `winit` thread to the conrod thread.
-    let (event_tx, event_rx): (std::sync::mpsc::Sender<Message>,
-                               std::sync::mpsc::Receiver<Message>) = std::sync::mpsc::channel();
-    // A channel to send `render::Primitive`s from the conrod thread to the `winit thread.
-    let (render_tx, render_rx) = std::sync::mpsc::channel();
-    // This window proxy will allow conrod to wake up the `winit::Window` for rendering.
-    let window_proxy = display.get_window().unwrap().create_window_proxy();
-
-    // A function that runs the conrod loop.
-    fn run_conrod(weecontrol: Arc<Mutex<WeeController>>,
-                  image_ids: &ImageIds,
-                  event_emit: std::sync::mpsc::Sender<Message>,
-                  event_rx: std::sync::mpsc::Receiver<Message>,
-                  render_tx: std::sync::mpsc::Sender<conrod::render::OwnedPrimitives>,
-                  window_proxy: glium::glutin::WindowProxy) {
-
-        // Initial state
-        let mut app_state = AppState::Initializing;
-
-        let mut notification_diag = NotificationDialog {
-            is_open: false,
-            message: String::new(),
-        };
-
-        let mut ui = conrod::UiBuilder::new([WINDOW_WIDTH as f64, WINDOW_HEIGHT as f64]).build();
-
-        // Unique identifier for each widget.
-        let ids = Ids::new(ui.widget_id_generator());
-
-        use conrod::text::FontCollection;
-        let font_bytes = include_bytes!("../assets/fonts/NotoSans/NotoSans-Regular.ttf");
-        let font =
-            FontCollection::from_bytes(&font_bytes[0..font_bytes.len()]).into_font().unwrap();
-        ui.fonts.insert(font);
-
-        let mut list: Vec<(DeviceInfo, bool)> = Vec::new();
-        // let mut weecontrol = Arc::new(Mutex::new(WeeController::new(Some(logger))));
-        start_notification_listener(event_emit.clone(), weecontrol.clone());
-        // Many widgets require another frame to finish drawing after clicks or hovers, so we
-        // insert an update into the conrod loop using this `bool` after each event.
-        let mut needs_update = true;
-        'conrod: loop {
-
-            if app_state == AppState::StartDiscovery {
-                list.clear();
-                app_state = AppState::Discovering;
-                start_discovery_async(event_emit.clone(), weecontrol.clone());
-            }
-
-            // Collect any pending events.
-            let mut events = Vec::new();
-            while let Ok(event) = event_rx.try_recv() {
-                events.push(event);
-            }
-
-            // If there are no events pending, wait for them.
-            if events.is_empty() || !needs_update {
-                match event_rx.recv() {
-                    Ok(event) => events.push(event),
-                    Err(_) => break 'conrod,
-                };
-            }
-
-            needs_update = false;
-
-            // Input each event into the `Ui`.
-            for event in events {
-                match event {
-                    Message::Event(e) => {
-                        ui.handle_event(e);
-                    }
-                    Message::DiscoveryEnded => {
-                        if list.is_empty() {
-                            app_state = AppState::NoDevices;
-                        } else {
-                            app_state = AppState::Ready;
-                        }
-                    }
-                    Message::DiscoveryItem(i) => {
-                        info!("UI Got device {:?}", i.unique_id);
-                        let i_state: bool = i.state == State::On;
-                        {
-                            let mut controller = weecontrol.lock().unwrap();
-                            let _ = controller.subscribe(&i.unique_id, SUBSCRIPTION_DURATION, true);
-                        }
-                        list.push((i, i_state));
-                    }
-                    Message::NotificationsStarted => (),
-                    Message::Notification(n) => update_list(&mut list, &n),
-                }
-                needs_update = true;
-            }
-
-            set_ui(ui.set_widgets(),
-                   &mut list,
-                   &ids,
-                   &mut app_state,
-                   weecontrol.clone(),
-                   &mut notification_diag,
-                   image_ids);
-
-            // Render the `Ui` to a list of primitives that we can send to the main thread for
-            // display.
-            if let Some(primitives) = ui.draw_if_changed() {
-                if render_tx.send(primitives.owned()).is_err() {
-                    break 'conrod;
-                }
-                // Wakeup `winit` for rendering.
-                window_proxy.wakeup_event_loop();
-            }
-        }
-    } // fn run_conrod
-
-    // Spawn the conrod loop on its own thread.
-    let weecontrol = Arc::new(Mutex::new(WeeController::new(Some(logger.clone()))));
-    let control_clone = weecontrol.clone();
-    let event_emitter = event_tx.clone();
-    std::thread::spawn(move || {
-        run_conrod(control_clone,
-                   &image_ids,
-                   event_emitter,
-                   event_rx,
-                   render_tx,
-                   window_proxy)
-    });
-
-    // Run the `winit` loop.
-    let mut last_update = std::time::Instant::now();
-    'main: loop {
-
-        // We don't want to loop any faster than 60 FPS, so wait until it has been at least
-        // 16ms since the last yield.
-        let sixteen_ms = std::time::Duration::from_millis(16);
-        let now = std::time::Instant::now();
-        let duration_since_last_update = now.duration_since(last_update);
-        if duration_since_last_update < sixteen_ms {
-            std::thread::sleep(sixteen_ms - duration_since_last_update);
-        }
-
-        // Collect all pending events.
-        let mut events: Vec<_> = display.poll_events().collect();
-
-        // If there are no events, wait for the next event.
-        if events.is_empty() {
-            events.extend(display.wait_events().next());
-        }
-
-        // Send any relevant events to the conrod thread.
-        for event in events {
-
-            // Use the `winit` backend feature to convert the winit event to a conrod one.
-            if let Some(event) = conrod::backend::winit::convert(event.clone(), &display) {
-                event_tx.send(Message::Event(event)).unwrap();
-            }
-
-            match event {
-                // Break from the loop upon `Escape`.
-                glium::glutin::Event::KeyboardInput(_, _,
-                    Some(glium::glutin::VirtualKeyCode::Escape)) |
-                glium::glutin::Event::Closed =>
-                    break 'main,
-                _ => {}
-            }
-        }
-
-        // Draw the most recently received `conrod::render::Primitives` sent from the `Ui`.
-        if let Ok(mut primitives) = render_rx.try_recv() {
-            while let Ok(newest) = render_rx.try_recv() {
-                primitives = newest;
-            }
-
-            renderer.fill(&display, primitives.walk(), &image_map);
-            let mut target = display.draw();
-            target.clear_color(0.0, 0.0, 0.0, 1.0);
-            renderer.draw(&display, &mut target, &image_map).unwrap();
-            target.finish().unwrap();
-        }
-
-        last_update = std::time::Instant::now();
-    }
-    let mut controller = weecontrol.lock().unwrap();
-    controller.unsubscribe_all();
+    let a = WeeApp::new();
+    a.run();
 }
 
-// Declare the `WidgetId`s and instantiate the widgets.
-fn set_ui(ref mut ui: conrod::UiCell,
-          list: &mut Vec<(DeviceInfo, bool)>,
-          ids: &Ids,
-          app_state: &mut AppState,
-          weecontrol: Arc<Mutex<WeeController>>,
-          notification_diag: &mut NotificationDialog,
-          image_ids: &ImageIds) {
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Settings {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+}
 
-    use conrod::{widget, Colorable, Labelable, Positionable, Sizeable, Widget};
+pub struct Storage {
+    cache_file: Option<std::path::PathBuf>,
+}
 
-    widget::Canvas::new().color(conrod::color::BLACK).set(ids.canvas, ui);
+impl Storage {
+    pub fn new() -> Storage {
+        let mut file_path: Option<std::path::PathBuf> = None;
 
-    widget::Canvas::new()
-        .color(conrod::color::BLACK)
-        .top_left_with_margins_on(ids.canvas, 0.0, 00.0)
-        .border(0.0)
-        .w_h(WINDOW_WIDTH as f64, TOP_BAR_HEIGHT as f64)
-        .set(ids.top_bar, ui);
-
-    const ITEM_HEIGHT: conrod::Scalar = 40.0;
-
-    widget::Canvas::new()
-        .color(conrod::color::DARK_CHARCOAL)
-        .w_h(LIST_WIDTH as f64, LIST_HEIGHT as f64)
-        .top_left_with_margins_on(ids.canvas, (TOP_BAR_HEIGHT) as f64, 40.0)
-        .set(ids.list_canvas, ui);
-
-    if widget::Button::image(image_ids.refresh_normal)
-        .press_image(image_ids.refresh_press)
-        .hover_image(image_ids.refresh_hover)
-        .w_h(40.0, 40.0)
-        .top_right_with_margins_on(ids.top_bar, 0.0, 0.0)
-        .color(color::TRANSPARENT)
-        .set(ids.button_refresh, ui)
-        .was_clicked() {
-        if !notification_diag.is_open && *app_state != AppState::Discovering {
-            info!("WeeApp REFRESH", );
-            *app_state = AppState::StartDiscovery;
+        if let Some(proj_dirs) = ProjectDirs::from("", "", "WeeApp") {
+            let mut path = proj_dirs.config_dir().to_path_buf();
+            path.push(SETTINGS_FILE);
+            file_path = Some(path);
+            info!("Settings file: {:#?}", file_path);
         }
-    }
-    if widget::Button::image(image_ids.clear_normal)
-        .press_image(image_ids.clear_press)
-        .hover_image(image_ids.clear_hover)
-        .w_h(40.0, 40.0)
-        .top_right_with_margins_on(ids.top_bar, 0.0, 40.0)
-        .color(color::TRANSPARENT)
-        .set(ids.button_clear, ui)
-        .was_clicked() {
-        if !notification_diag.is_open && *app_state != AppState::Discovering {
-            *app_state = AppState::NoDevices;
-            info!("WeeApp CLEAR", );
-            {
-                let mut controller = weecontrol.lock().unwrap();
-                controller.clear(true);
-                list.clear();
-            }
+        Storage {
+            cache_file: file_path,
         }
     }
 
-    if *app_state == AppState::Ready || (*app_state == AppState::Discovering && !list.is_empty()) {
-        let (mut items, scrollbar) = widget::List::flow_down(list.len())
-            .item_size(ITEM_HEIGHT)
-            .scrollbar_on_top()
-            .scrollbar_color(conrod::color::BLUE)
-            .scrollbar_thickness(15.0)
-            .middle_of(ids.list_canvas)
-            .wh_of(ids.list_canvas)
-            .set(ids.list, ui);
+    /// Write data to cache, errors ignored
+    pub fn write(&self, settings: Settings) {
+        if let Some(ref fpath) = self.cache_file {
+            let data = settings;
+            if let Some(prefix) = fpath.parent() {
+                let _ = std::fs::create_dir_all(prefix);
 
-        while let Some(item) = items.next(ui) {
-            let i = item.i;
-            let label = list[i].0.friendly_name.clone();
-            let label_color = conrod::color::WHITE;
-            let color = conrod::color::LIGHT_BLUE;
-            let toggle = widget::Toggle::new(list[i].1)
-                .label(&label)
-                .label_color(label_color)
-                .color(color);
-            for v in item.set(toggle, ui) {
-                if !notification_diag.is_open {
-                    if list[i].1 != v {
-                        let mut controller = weecontrol.lock().unwrap();
-                        let new_state = if v { State::On } else { State::Off };
-                        let res = controller.set_binary_state(&list[i].0.unique_id, new_state);
-                        match res {
-                            Ok(_) => list[i].1 = v,
-                            Err(weectrl::error::Error::DeviceError) => {
-                                match controller.get_binary_state(&list[i].0.unique_id) {
-                                    Ok(state) => {
-                                        list[i].1 = state == State::On;
-                                    }
-                                    Err(e) => {
-                                        notification_diag.message = format!("ERROR\n{:?}.", e);
-                                        notification_diag.is_open = true;
-                                    }
-                                };
-                            }
-                            Err(e) => {
-                                notification_diag.message = format!("ERROR\n{:?}.", e);
-                                notification_diag.is_open = true;
-                            }
-                        };
-                        info!("WeeApp TOGGLE {:?} {:?}", i, v);
+                if let Ok(serialized) = serde_json::to_string(&data) {
+                    if let Ok(mut buffer) = File::create(fpath) {
+                        let _ = buffer.write_all(&serialized.into_bytes());
                     }
                 }
             }
         }
-        if let Some(s) = scrollbar {
-            s.set(ui)
-        }
-
-        if notification_diag.is_open {
-            widget::Canvas::new()
-                .color(conrod::color::BLUE)
-                .middle_of(ids.list_canvas)
-                .w_h(200.0, 160.0)
-                .set(ids.notify_canvas, ui);
-
-            widget::Text::new(&notification_diag.message)
-                .color(color::YELLOW)
-                .w_h(180.0, 100.0)
-                .top_left_with_margins_on(ids.notify_canvas, 10.0, 10.0)
-                .set(ids.notify_label, ui);
-
-            if widget::Button::new()
-                .color(conrod::color::PURPLE)
-                .mid_top_with_margin_on(ids.notify_canvas, 100.0)
-                .label("Dismiss")
-                .w_h(80.0, 40.0)
-                .set(ids.notify_button, ui)
-                .was_clicked() {
-                notification_diag.is_open = false;
-            }
-        }
-        if *app_state == AppState::Discovering {
-            widget::Text::new("Searching...")
-                .color(color::YELLOW)
-                .w_h(180.0, 20.0)
-                .bottom_left_with_margins_on(ids.canvas, 15.0, 15.0)
-                .set(ids.scanning_label, ui);
-        }
-    } else {
-        match *app_state {
-            AppState::Ready => (),
-            AppState::StartDiscovery => {}
-            AppState::Initializing => {
-                widget::Text::new("Scanning for devices...")
-                    .color(color::LIGHT_YELLOW)
-                    .middle_of(ids.list_canvas)
-                    .set(ids.wait_label, ui);
-                *app_state = AppState::StartDiscovery;
-            }
-            AppState::Discovering => {
-                widget::Text::new("Scanning for devices...")
-                    .color(color::LIGHT_YELLOW)
-                    .middle_of(ids.list_canvas)
-                    .set(ids.wait_label, ui);
-            }
-            AppState::NoDevices => {
-                widget::Text::new("No devices found.")
-                    .color(color::LIGHT_YELLOW)
-                    .middle_of(ids.list_canvas)
-                    .set(ids.wait_label, ui);
-            }
-        }
     }
-}
 
-fn update_list(list: &mut Vec<(DeviceInfo, bool)>, notification: &StateNotification) {
-    for entry in list.iter_mut() {
-        if *entry.0.unique_id == notification.unique_id {
-            match notification.state {
-                State::On => entry.1 = true,
-                State::Off => entry.1 = false,
-                State::Unknown => (),
-            };
-            break;
+    pub fn read(&self) -> Option<Settings> {
+        if let Some(ref fpath) = self.cache_file {
+            if let Ok(mut file) = File::open(fpath) {
+                let mut s = String::new();
+                let _ = file.read_to_string(&mut s);
+                let data: Option<Settings> = serde_json::from_str(&s).ok();
+                return data;
+            }
         }
+        None
     }
-}
 
-// Convert a PNG image to a texture
-fn load_image(image_bytes: &[u8], display: &glium::Display) -> glium::texture::Texture2d {
-
-    use image::ImageDecoder;
-    let mut decoder = image::png::PNGDecoder::new(&image_bytes[0..image_bytes.len()]);
-    let dimensions = decoder.dimensions().unwrap();
-    let buf = decoder.read_image().unwrap();
-
-    if let image::DecodingResult::U8(buf) = buf {
-        let raw_image = glium::texture::RawImage2d::from_raw_rgba_reversed(buf, dimensions);
-        let texture = glium::texture::Texture2d::new(display, raw_image).unwrap();
-        return texture;
-    }
-    glium::texture::Texture2d::empty(display, 0, 0).unwrap()
-}
-
-struct MyFormat;
-
-impl slog_stream::Format for MyFormat {
-    fn format(&self,
-              io: &mut io::Write,
-              rinfo: &slog::Record,
-              _logger_values: &slog::OwnedKeyValueList)
-              -> io::Result<()> {
-        let ts = chrono::Local::now();
-        let msg = format!("{} {} {}: {}\n",
-                          ts.format("%H:%M:%S%.3f"),
-                          rinfo.level(),
-                          rinfo.module(),
-                          rinfo.msg());
-        io.write_all(msg.as_bytes())?;
-        Ok(())
+    pub fn clear(&self) {
+        if let Some(ref fpath) = self.cache_file {
+            let _ = std::fs::remove_file(fpath);
+        }
     }
 }

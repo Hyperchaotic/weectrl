@@ -1,9 +1,10 @@
-use hyper::Error as HttpError;
-use hyper::StatusCode;
+use reqwest::header::InvalidHeaderValue;
+use reqwest::Error as HttpError;
+use reqwest::StatusCode;
+use serde_xml_rs::Error as SerdeError;
 use std::io;
-use url::ParseError;
-use serde_xml::Error as SerdeError;
 use std::num::ParseIntError;
+use url::ParseError;
 
 /// If a semaphore fails, panic immediately with this message.
 pub const FATAL_LOCK: &'static str = "FATAL Error, Lock failed!";
@@ -27,6 +28,13 @@ pub enum Error {
     IoError(io::Error),
     UrlError(ParseError),
     ParseError(ParseIntError),
+    HttpHeaderError,
+}
+
+impl From<InvalidHeaderValue> for Error {
+    fn from(_err: InvalidHeaderValue) -> Error {
+        Error::HttpHeaderError
+    }
 }
 
 impl From<ParseIntError> for Error {
