@@ -122,9 +122,12 @@ impl Device {
         if auto_resubscribe {
             let (tx, rx) = mpsc::channel();
             self.subscription_daemon = Some(tx);
-            thread::spawn(move || {
-                Device::subscription_daemon(rx, req_url, new_sid, seconds, callback);
-            });
+
+            let _ = std::thread::Builder::new()
+                .name(format!("DEV_resub_thread {}", self.info.friendly_name).to_string())
+                .spawn(move || {
+                    Device::subscription_daemon(rx, req_url, new_sid, seconds, callback);
+                });
         }
 
         Ok((res.sid, res.timeout))

@@ -1,6 +1,6 @@
 // On Windows don't create terminal window when opening app in GUI
 
-#![windows_subsystem = "windows"]
+//#![windows_subsystem = "windows"]
 
 extern crate weectrl;
 
@@ -40,7 +40,6 @@ enum Message {
 struct WeeApp {
     app: app::App,
     main_win: window::Window,
-    inner_win: window::Window,
     scroll: group::Scroll,
     pack: group::Pack,
     reloading_frame: frame::Frame,
@@ -125,22 +124,22 @@ impl WeeApp {
         btn_clear.set_tooltip(CLEAR_TOOLTIP);
 
         btn_clear.handle(move |b, e| match e {
-            enums::Event::Enter => {
+            Event::Enter => {
                 b.set_image(Some(ich.clone()));
                 b.redraw();
                 true
             }
-            enums::Event::Released => {
+            Event::Released => {
                 b.set_image(Some(ich.clone()));
                 b.redraw();
                 true
             }
-            enums::Event::Leave => {
+            Event::Leave => {
                 b.set_image(Some(ic.clone()));
                 b.redraw();
                 true
             }
-            enums::Event::Push => {
+            Event::Push => {
                 b.set_image(Some(icc.clone()));
                 true
             }
@@ -168,22 +167,22 @@ impl WeeApp {
         btn_reload.emit(s.clone(), Message::Reload);
 
         btn_reload.handle(move |b, e| match e {
-            enums::Event::Enter => {
+            Event::Enter => {
                 b.set_image(Some(irh.clone()));
                 b.redraw();
                 true
             }
-            enums::Event::Released => {
+            Event::Released => {
                 b.set_image(Some(irh.clone()));
                 b.redraw();
                 true
             }
-            enums::Event::Leave => {
+            Event::Leave => {
                 b.set_image(Some(ir.clone()));
                 b.redraw();
                 true
             }
-            enums::Event::Push => {
+            Event::Push => {
                 b.set_image(Some(irc.clone()));
                 true
             }
@@ -192,7 +191,10 @@ impl WeeApp {
 
         let mut inner_win = window::Window::default()
             .with_label("TEST RESIZE")
-            .with_size(LIST_WIDTH, LIST_HEIGHT);
+            .with_size(
+                main_win.w() - 2 * UNIT_SPACING,
+                main_win.h() - 2 * UNIT_SPACING,
+            );
 
         inner_win.set_pos(UNIT_SPACING, TOP_BAR_HEIGHT);
         inner_win.set_frame(enums::FrameType::BorderBox);
@@ -223,7 +225,7 @@ impl WeeApp {
         main_win.add(&reloading_frame);
 
         let mut sc = scroll.clone();
-        let mut fr = inner_win.clone();
+        let mut inner_win_c = inner_win.clone();
         let mut pa = pack.clone();
         let mut reload = btn_reload.clone();
         let mut clear = btn_clear.clone();
@@ -232,7 +234,7 @@ impl WeeApp {
         let mut controller = WeeController::new();
 
         main_win.handle(move |w, ev| match ev {
-            enums::Event::Hide => {
+            Event::Hide => {
                 //controller.unsubscribe_all();
                 let settings = Settings {
                     x: w.x(),
@@ -248,27 +250,17 @@ impl WeeApp {
                 true
             }
 
-            enums::Event::Resize => {
-                info!(
-                    "enums::Event::Resize {:?} {:?} {:?} {:?}",
-                    w.x(),
-                    w.y(),
-                    w.w(),
-                    w.h()
-                );
-                fr.resize(
+            Event::Resize => {
+                inner_win_c.resize(
                     UNIT_SPACING,
                     TOP_BAR_HEIGHT,
                     w.w() - 2 * UNIT_SPACING,
-                    w.h() - 2 * UNIT_SPACING,
+                    w.h() - 2 * UNIT_SPACING - 5,
                 );
-                pa.resize(
-                    0,
-                    0,
-                    w.w() - 2 * UNIT_SPACING - 15,
-                    w.h() - 2 * UNIT_SPACING,
-                );
-                sc.resize(0, 0, w.w() - 2 * UNIT_SPACING, w.h() - 2 * UNIT_SPACING);
+
+                pa.resize(0, 0, inner_win_c.w() - SCROLL_WIDTH, inner_win_c.h());
+
+                sc.resize(0, 0, inner_win_c.w(), inner_win_c.h());
 
                 reload.set_size(50, 50);
                 reload.set_pos(w.w() - UNIT_SPACING - 10, 0);
@@ -289,11 +281,13 @@ impl WeeApp {
         let rx = controller.start_subscription_service().unwrap();
         let sc = s.clone();
 
-        let _ = std::thread::spawn(move || {
-            while let Ok(n) = rx.recv() {
-                let _ = sc.send(Message::Notification(n.clone()));
-            }
-        });
+        let _ = std::thread::Builder::new()
+            .name("APP_notifiy".to_string())
+            .spawn(move || {
+                while let Ok(n) = rx.recv() {
+                    let _ = sc.send(Message::Notification(n.clone()));
+                }
+            });
 
         main_win.show();
 
@@ -307,7 +301,6 @@ impl WeeApp {
         Self {
             app: app,
             main_win: main_win,
-            inner_win: inner_win,
             pack: pack,
             scroll: scroll,
             reloading_frame: reloading_frame,
@@ -380,12 +373,12 @@ impl WeeApp {
                         }
 
                         but.handle(move |b, e| match e {
-                            enums::Event::Enter => {
+                            Event::Enter => {
                                 b.set_frame(enums::FrameType::DiamondUpBox);
                                 b.redraw();
                                 true
                             }
-                            enums::Event::Leave => {
+                            Event::Leave => {
                                 b.set_frame(enums::FrameType::UpBox);
                                 b.redraw();
                                 true
@@ -445,19 +438,21 @@ impl WeeApp {
                             false,
                             5,
                         );
-                        std::thread::spawn(move || {
-                            loop {
-                                let msg = rx.recv();
-                                info!("Discover thread forwarding");
-                                match msg {
-                                    Ok(dev) => s.send(Message::AddButton(dev)),
-                                    Err(_) => {
-                                        s.send(Message::EndDiscovery);
-                                        break; // End thread
+                        let _ = std::thread::Builder::new()
+                            .name("APP_discovery".to_string())
+                            .spawn(move || {
+                                loop {
+                                    let msg = rx.recv();
+                                    info!("Discover thread forwarding");
+                                    match msg {
+                                        Ok(dev) => s.send(Message::AddButton(dev)),
+                                        Err(_) => {
+                                            s.send(Message::EndDiscovery);
+                                            break; // End thread
+                                        }
                                     }
                                 }
-                            }
-                        });
+                            });
                     }
 
                     Message::EndDiscovery => {

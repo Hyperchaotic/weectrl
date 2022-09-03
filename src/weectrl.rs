@@ -383,12 +383,13 @@ impl WeeController {
             self.clear(false);
         }
 
-        use std::thread;
-
-        let (tx, rx) = mpsc::channel(); // love channels
+        let (tx, rx) = mpsc::channel();
         let devices = self.devices.clone();
         let cache = self.cache.clone();
-        thread::spawn(move || {
+
+        let _ = std::thread::Builder::new()
+        .name("SSDP_main".to_string())
+        .spawn(move || {
             info!("Starting discover");
 
             if mode == DiscoveryMode::CacheOnly || mode == DiscoveryMode::CacheAndBroadcast {
@@ -423,18 +424,45 @@ impl WeeController {
                     .set_read_timeout(Some(Duration::from_secs((mx + 1) as u64)))
                     .unwrap();
 
+                let (cache_dirt_tx, cache_dirt_rx) = mpsc::channel();
+
+                let mut num_threads = 0;
                 while let Ok(e) = socket.recv(&mut buf) {
-                    let message = std::str::from_utf8(&buf[..e]).unwrap();
+                    let message = std::str::from_utf8(&buf[..e]).unwrap().to_string();
+                    info!("------------------------------------------------------------------------------");
+                    info!("SSDP response: {:#?}", &message);
 
-                    if let Some(location) = WeeController::parse_ssdp_response(message) {
-                        let device = WeeController::register_device(&location, &devices).ok();
+                    // Handle message in different thread
+                    let devs = devices.clone();
+                    let nx = tx.clone();
+                    let cache_dirt = cache_dirt_tx.clone();
+                    num_threads = num_threads + 1;
 
-                        if let Some(new) = device {
-                            let _ = tx.send(new);
-                            cache_dirty = true;
-                        }
+                    let _ = std::thread::Builder::new()
+                        .name(format!("SSDP_handle_msg {}", num_threads).to_string())
+                        .spawn(move || {
+                            if let Some(location) = WeeController::parse_ssdp_response(&message) {
+                                let device = WeeController::register_device(&location, &devs).ok();
+
+                                if let Some(new) = device {
+                                    let _ = nx.send(new);
+                                    let _ = cache_dirt.send(true);
+                                } else {
+                                    let _ = cache_dirt.send(false);
+                                }
+                            }
+                        });
+                }
+
+                info!("WAITING FOR {:?} threads", num_threads);
+                for _ in 0..num_threads {
+                    if cache_dirt_rx.recv().unwrap() == true {
+                        info!("CACHE DIRTY");
+                        cache_dirty = true;
                     }
                 }
+
+                info!("AFTER");
 
                 if cache_dirty {
                     WeeController::refresh_cache(cache, devices);
@@ -451,8 +479,6 @@ impl WeeController {
     pub fn start_subscription_service(
         &mut self,
     ) -> Result<mpsc::Receiver<StateNotification>, error::Error> {
-        use std::thread;
-
         let mut res = Err(Error::ServiceAlreadyRunning);
         let mutex = Mutex::new(0);
         {
@@ -462,9 +488,12 @@ impl WeeController {
                 let port = self.port;
                 let (tx, rx) = mpsc::channel();
                 let devices = self.devices.clone();
-                thread::spawn(move || {
-                    WeeController::subscription_server(tx, devices, port);
-                });
+
+                let _ = std::thread::Builder::new()
+                    .name("SUB_server".to_string())
+                    .spawn(move || {
+                        WeeController::subscription_server(tx, devices, port);
+                    });
                 self.subscription_daemon.store(true, Ordering::Relaxed);
                 res = Ok(rx);
             }
@@ -486,7 +515,14 @@ impl WeeController {
         let mut thread_count: u64 = 0;
 
         for stream in listener.incoming() {
-            let mut stream2 = stream.unwrap();
+            let mut stream2;
+            match stream {
+                Ok(stream) => stream2 = stream,
+                Err(e) => {
+                    info!("Subscription server ended {:?}", e);
+                    break;
+                }
+            };
 
             // Just for debug info
             thread_count = thread_count + 1;
@@ -496,7 +532,9 @@ impl WeeController {
             let tx = tx.clone();
 
             //Spawning off a thread for the connection.
-            std::thread::spawn(move || {
+            let _ = std::thread::Builder::new()
+            .name("SUBSRV_handle_msg".to_string())
+            .spawn(move || {
                 let mut full_message = String::new();
 
                 'read_message: loop {
