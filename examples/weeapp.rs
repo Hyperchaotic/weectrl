@@ -100,7 +100,7 @@ impl WeeApp {
 
         let mut main_win = window::Window::default()
             .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
-            .with_label("WeeApp 0.9 (beta)");
+            .with_label("WeeApp 0.9.1 (beta)");
         main_win.set_color(enums::Color::Gray0);
 
         let mut image_clear = PngImage::from_data(CL_BTN1).unwrap();
