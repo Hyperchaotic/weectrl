@@ -1,6 +1,6 @@
 // On Windows don't create terminal window when opening app in GUI
 
-//#![windows_subsystem = "windows"]
+#![windows_subsystem = "windows"]
 
 extern crate weectrl;
 
@@ -66,6 +66,8 @@ const SCROLL_WIDTH: i32 = 15;
 const BUTTON_ON_COLOR: enums::Color = enums::Color::from_rgb(114, 159, 207);
 const BUTTON_OFF_COLOR: enums::Color = enums::Color::from_rgb(13, 25, 38);
 
+const WINDOW_ICON: &[u8] = include_bytes!("images/icon.png");
+
 const RL_BTN1: &[u8] = include_bytes!("images/refresh_b.png");
 const RL_BTN2: &[u8] = include_bytes!("images/refresh_press_b.png");
 const RL_BTN3: &[u8] = include_bytes!("images/refresh_hover_b.png");
@@ -74,6 +76,7 @@ const CL_BTN1: &[u8] = include_bytes!("images/clear.png");
 const CL_BTN2: &[u8] = include_bytes!("images/clear_press.png");
 const CL_BTN3: &[u8] = include_bytes!("images/clear_hover.png");
 
+const WEEAPP_TITLE: &str = "WeeApp 0.9.2 (beta)";
 const CLEAR_TOOLTIP: &str = "Forget all devices and clear the on-disk list of known devices.";
 const RELOAD_TOOLTIP: &str =
     "Reload list of devices from on-disk list (if any) and then by network query.";
@@ -100,8 +103,11 @@ impl WeeApp {
 
         let mut main_win = window::Window::default()
             .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
-            .with_label("WeeApp 0.9.1 (beta)");
+            .with_label(WEEAPP_TITLE);
         main_win.set_color(enums::Color::Gray0);
+
+        let window_icon = PngImage::from_data(WINDOW_ICON).unwrap();
+        main_win.set_icon(Some(window_icon));
 
         let mut image_clear = PngImage::from_data(CL_BTN1).unwrap();
         image_clear.scale(50, 50, true, true);
@@ -207,7 +213,7 @@ impl WeeApp {
         scroll.set_color(enums::Color::BackGround | enums::Color::from_hex(0x2e3436));
         scroll.set_scrollbar_size(SCROLL_WIDTH);
 
-        let mut pack = group::Pack::new(0, 0, LIST_WIDTH - 15, LIST_HEIGHT, "GGGG");
+        let mut pack = group::Pack::new(0, 0, LIST_WIDTH - 15, LIST_HEIGHT, "");
         pack.set_type(group::PackType::Vertical);
         pack.set_spacing(2);
         pack.set_color(enums::Color::BackGround | enums::Color::Red);
@@ -312,6 +318,28 @@ impl WeeApp {
         }
     }
 
+    // When adding buttons, they would not show, even with app.redraw().
+    // Resizing window is the only thing that works.
+    fn force_refresh(&mut self) {
+        //Sometimes the buttons would mysteriously be double height
+        let cnt = self.pack.children();
+        for i in 0..cnt {
+            let mut btn = self.pack.child(i).unwrap();
+            btn.set_size(0, UNIT_SPACING);
+        }
+
+        self.pack.redraw();
+        self.scroll.redraw();
+
+        // It only shows the buttons if I do this, TODO figure out why...
+        self.main_win
+            .set_size(self.main_win.w(), self.main_win.h() + 5);
+        self.main_win.redraw();
+        self.main_win
+            .set_size(self.main_win.w(), self.main_win.h() - 5);
+        self.main_win.redraw();
+    }
+
     pub fn run(mut self) {
         while self.app.wait() {
             if let Some(msg) = self.receiver.recv() {
@@ -391,16 +419,7 @@ impl WeeApp {
                         self.buttons.insert(device.unique_id, but.clone());
                         self.pack.add(&but);
 
-                        self.pack.redraw();
-                        self.scroll.redraw();
-
-                        // It only shows the buttons if I do this, TODO figure out why...
-                        self.main_win
-                            .set_size(self.main_win.w(), self.main_win.h() + 5);
-                        self.main_win.redraw();
-                        self.main_win
-                            .set_size(self.main_win.w(), self.main_win.h() - 5);
-                        self.main_win.redraw();
+                        self.force_refresh();
                     }
 
                     Message::Clicked(device) => {
