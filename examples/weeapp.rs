@@ -256,6 +256,18 @@ impl WeeApp {
                 true
             }
 
+            Event::Show => {
+                info!("Event::Show");
+                //Sometimes the buttons would mysteriously be double height
+                //Trying this hack to mitigate
+                let cnt = pa.children();
+                for i in 0..cnt {
+                    let mut btn = pa.child(i).unwrap();
+                    btn.set_size(0, UNIT_SPACING);
+                }
+                false
+            }
+
             Event::Resize => {
                 inner_win_c.resize(
                     UNIT_SPACING,
@@ -265,6 +277,14 @@ impl WeeApp {
                 );
 
                 pa.resize(0, 0, inner_win_c.w() - SCROLL_WIDTH, inner_win_c.h());
+
+                //Sometimes the buttons would mysteriously be double height
+                //Trying this hack to mitigate
+                let cnt = pa.children();
+                for i in 0..cnt {
+                    let mut btn = pa.child(i).unwrap();
+                    btn.set_size(0, UNIT_SPACING);
+                }
 
                 sc.resize(0, 0, inner_win_c.w(), inner_win_c.h());
 
@@ -321,13 +341,7 @@ impl WeeApp {
     // When adding buttons, they would not show, even with app.redraw().
     // Resizing window is the only thing that works.
     fn force_refresh(&mut self) {
-        //Sometimes the buttons would mysteriously be double height
-        let cnt = self.pack.children();
-        for i in 0..cnt {
-            let mut btn = self.pack.child(i).unwrap();
-            btn.set_size(0, UNIT_SPACING);
-        }
-
+        self.pack.auto_layout();
         self.pack.redraw();
         self.scroll.redraw();
 
