@@ -66,7 +66,7 @@ let rx: mpsc::Receiver<DeviceInfo> = self.controller.discover_async(
     );
 ```
 Scans both disk cache file and network, will "forget" in-memory list first. Give network devices maximum 5 seconds to respond.
-The returned  will receive device information as they're found and when discovery ends it will be closed.
+The ```Receiver``` will receive device information as they're found and when discovery ends the channel will be closed.
 
 Blocking version of the discover function.
 ``` rust
