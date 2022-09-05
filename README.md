@@ -2,24 +2,27 @@
 
 A cross platform library and application for controlling Belkin WeMo switches and Sockets. Written in Rust.
 
-## Wee Controller, the application
+## WeeApp, the application
 
 ### Screenshots
 
 ![Linux](http://i.imgur.com/4QutZDQ.png "Linux")   ![Windows](http://i.imgur.com/PoNrogW.png "Windows")   ![macOS](http://i.imgur.com/s4XsDnA.png "macOS")
 
 ### Functionality
-The "Wee Controller" application will scan the local network for Belkin WeMo devices and list what's found. They can be switched on/off from the app and if a device changes state due to external activity (e.g. physical toggle or schedule) this will be reflected in the app UI due to the notification feature.
+The "WeeApp" application will scan the local network for Belkin WeMo devices and list what's found. They can be switched on/off from the app and if a device changes state due to external activity (e.g. physical toggle or schedule) this will be reflected in the app UI due to the notification feature.
 
-Searching for new devices can take 5-10 seconds but the app benefits from the caching feature of the library so previously known devices will be displayed very quickly upon restart.   
+Searching for new devices can take 5-6 seconds but the app benefits from the caching feature of the library so previously known devices will be displayed very quickly upon restart.   
 
 * The "paper basket" will forget all devices and erase the disk cache.
 * The reload button will load known devices from cache and rescan the network.
+* The application remembers size and position of its window. 
 
 ### Platforms
 Current version tested on Windows 11 and Linux.
 
 ### Building
+
+The (example) App has certain FLTK_rs [dependencies](https://fltk-rs.github.io/fltk-book/Setup.html).
 
 ```
 cargo build --release --example weeapp
@@ -33,7 +36,7 @@ rcedit target\release\examples\weeapp.exe --set-icon examples\images\icon.ico
 
 ## weectrl, the library
 ### Functionality
-* Discover devices synchronously or asynchronously.
+* Discover devices synchronously or asynchronously (threaded).
 * Retrieve detailed device information.
 * Switch devices on or off.
 * Cache known devices on disk for quick reload.
@@ -41,7 +44,7 @@ rcedit target\release\examples\weeapp.exe --set-icon examples\images\icon.ico
 * Uses the Tracing crate for logging.
 
 ### API examples
-Note: Binding types included for clarity. 
+
 #### Initialization and discovery
 Create new instance of controller:
 ``` rust
@@ -56,11 +59,11 @@ To discover devices on network or/and in cache asynchronously:
 ``` rust
 
 
-    let rx: mpsc::Receiver<DeviceInfo> = self.controller.discover_async(
-        DiscoveryMode::CacheAndBroadcast, 
-        true, 
-        5, 
-        );
+let rx: mpsc::Receiver<DeviceInfo> = self.controller.discover_async(
+    DiscoveryMode::CacheAndBroadcast, 
+    true, 
+    5, 
+    );
 ```
 Scans both disk cache file and network, will "forget" in-memory list first. Give network devices maximum 5 seconds to respond.
 The returned  will receive device information as they're found and when discovery ends it will be closed.
@@ -78,7 +81,7 @@ Let `unique_id` be a `DeviceInfo::unique_id` returned by previous discovery.
 
 Starting listening for notifications from subscribed devices:
 ``` rust
-        let rx: mpsc::Receiver<StateNotification> = controller.start_subscription_service().unwrap();
+let rx: mpsc::Receiver<StateNotification> = controller.start_subscription_service().unwrap();
 ```
 Whenever a switch is toggled a message will appear on the Receiver. This channel will live for the duration
 of the application. 
