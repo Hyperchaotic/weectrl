@@ -388,89 +388,88 @@ impl WeeController {
         let cache = self.cache.clone();
 
         let _ = std::thread::Builder::new()
-        .name("SSDP_main".to_string())
-        .spawn(move || {
-            info!("Starting discover");
+            .name("SSDP_main".to_string())
+            .spawn(move || {
+                info!("Starting discover");
 
-            if mode == DiscoveryMode::CacheOnly || mode == DiscoveryMode::CacheAndBroadcast {
-                info!("Loading devices from cache.");
-                if let Some(cache_list) = cache.lock().expect(error::FATAL_LOCK).read() {
-                    info!("Cached devices {:?}", cache_list);
+                if mode == DiscoveryMode::CacheOnly || mode == DiscoveryMode::CacheAndBroadcast {
+                    info!("Loading devices from cache.");
+                    if let Some(cache_list) = cache.lock().expect(error::FATAL_LOCK).read() {
+                        info!("Cached devices {:?}", cache_list);
 
-                    for cache_entry in cache_list.into_iter() {
-                        let device =
-                            WeeController::register_device(&cache_entry.location, &devices).ok();
-                        if let Some(new) = device {
-                            let _ = tx.send(new);
+                        for cache_entry in cache_list.into_iter() {
+                            let device =
+                                WeeController::register_device(&cache_entry.location, &devices)
+                                    .ok();
+                            if let Some(new) = device {
+                                let _ = tx.send(new);
+                            }
                         }
                     }
                 }
-            }
 
-            if mode == DiscoveryMode::BroadcastOnly || mode == DiscoveryMode::CacheAndBroadcast {
-                info!("Broadcasting uPnP query.");
-                // Create Our Search Request
+                if mode == DiscoveryMode::BroadcastOnly || mode == DiscoveryMode::CacheAndBroadcast
+                {
+                    info!("Broadcasting uPnP query.");
+                    // Create Our Search Request
 
-                let devices = devices.clone(); // to move into the new thread
-                let mut cache_dirty = false;
+                    let devices = devices.clone(); // to move into the new thread
+                    let mut cache_dirty = false;
 
-                let bind_address = WeeController::get_bind_addr().unwrap();
-                let socket = UdpSocket::bind(&bind_address).unwrap();
+                    let bind_address = WeeController::get_bind_addr().unwrap();
+                    let socket = UdpSocket::bind(&bind_address).unwrap();
 
-                WeeController::send_sddp_request(&socket, mx);
+                    WeeController::send_sddp_request(&socket, mx);
 
-                let mut buf = [0u8; 2048];
-                socket
-                    .set_read_timeout(Some(Duration::from_secs((mx + 1) as u64)))
-                    .unwrap();
+                    let mut buf = [0u8; 2048];
+                    socket
+                        .set_read_timeout(Some(Duration::from_secs((mx + 1) as u64)))
+                        .unwrap();
 
-                let (cache_dirt_tx, cache_dirt_rx) = mpsc::channel();
+                    let (cache_dirt_tx, cache_dirt_rx) = mpsc::channel();
 
-                let mut num_threads = 0;
-                while let Ok(e) = socket.recv(&mut buf) {
-                    let message = std::str::from_utf8(&buf[..e]).unwrap().to_string();
-                    info!("------------------------------------------------------------------------------");
-                    info!("SSDP response: {:#?}", &message);
+                    let mut num_threads = 0;
+                    while let Ok(e) = socket.recv(&mut buf) {
+                        let message = std::str::from_utf8(&buf[..e]).unwrap().to_string();
 
-                    // Handle message in different thread
-                    let devs = devices.clone();
-                    let nx = tx.clone();
-                    let cache_dirt = cache_dirt_tx.clone();
-                    num_threads = num_threads + 1;
+                        // Handle message in different thread
+                        let devs = devices.clone();
+                        let nx = tx.clone();
+                        let cache_dirt = cache_dirt_tx.clone();
+                        num_threads = num_threads + 1;
 
-                    let _ = std::thread::Builder::new()
-                        .name(format!("SSDP_handle_msg {}", num_threads).to_string())
-                        .spawn(move || {
-                            if let Some(location) = WeeController::parse_ssdp_response(&message) {
-                                let device = WeeController::register_device(&location, &devs).ok();
+                        let _ = std::thread::Builder::new()
+                            .name(format!("SSDP_handle_msg {}", num_threads).to_string())
+                            .spawn(move || {
+                                if let Some(location) = WeeController::parse_ssdp_response(&message)
+                                {
+                                    let device =
+                                        WeeController::register_device(&location, &devs).ok();
 
-                                if let Some(new) = device {
-                                    let _ = nx.send(new);
-                                    let _ = cache_dirt.send(true);
-                                } else {
-                                    let _ = cache_dirt.send(false);
+                                    if let Some(new) = device {
+                                        let _ = nx.send(new);
+                                        let _ = cache_dirt.send(true);
+                                    } else {
+                                        let _ = cache_dirt.send(false);
+                                    }
                                 }
-                            }
-                        });
-                }
+                            });
+                    }
 
-                info!("WAITING FOR {:?} threads", num_threads);
-                for _ in 0..num_threads {
-                    if cache_dirt_rx.recv().unwrap() == true {
-                        info!("CACHE DIRTY");
-                        cache_dirty = true;
+                    for _ in 0..num_threads {
+                        if cache_dirt_rx.recv().unwrap() == true {
+                            info!("CACHE DIRTY");
+                            cache_dirty = true;
+                        }
+                    }
+
+                    if cache_dirty {
+                        WeeController::refresh_cache(cache, devices);
                     }
                 }
 
-                info!("AFTER");
-
-                if cache_dirty {
-                    WeeController::refresh_cache(cache, devices);
-                }
-            }
-
-            info!("Done! Ending discover thread.");
-        });
+                info!("Done! Ending discover thread.");
+            });
         rx
     }
 

@@ -50,7 +50,7 @@ struct WeeApp {
     buttons: HashMap<String, button::Button>, // List of deviceID's and indexes of the associated buttons
 }
 
-const SETTINGS_FILE: &'static str = "Settings.dat";
+const SETTINGS_FILE: &'static str = "Settings.json";
 
 const SUBSCRIPTION_DURATION: u32 = 180;
 const SUBSCRIPTION_AUTO_RENEW: bool = true;
@@ -76,7 +76,7 @@ const CL_BTN1: &[u8] = include_bytes!("images/clear.png");
 const CL_BTN2: &[u8] = include_bytes!("images/clear_press.png");
 const CL_BTN3: &[u8] = include_bytes!("images/clear_hover.png");
 
-const WEEAPP_TITLE: &str = "WeeApp 0.9.2 (beta)";
+const WEEAPP_TITLE: &str = "WeeApp 0.9.3 (beta)";
 const CLEAR_TOOLTIP: &str = "Forget all devices and clear the on-disk list of known devices.";
 const RELOAD_TOOLTIP: &str =
     "Reload list of devices from on-disk list (if any) and then by network query.";
@@ -249,7 +249,7 @@ impl WeeApp {
                     h: w.h(),
                 };
 
-                info!("Quitting. Saving Window: {:#?}", settings);
+                info!("Quitting. Saving Window position/size: {:#?}", settings);
 
                 let storage = Storage::new();
                 storage.write(settings);
@@ -263,6 +263,7 @@ impl WeeApp {
                 let cnt = pa.children();
                 for i in 0..cnt {
                     let mut btn = pa.child(i).unwrap();
+                    info!("Show: Btn {} size {} {}", btn.label(), btn.w(), btn.h());
                     btn.set_size(0, UNIT_SPACING);
                 }
                 false
@@ -278,14 +279,6 @@ impl WeeApp {
 
                 pa.resize(0, 0, inner_win_c.w() - SCROLL_WIDTH, inner_win_c.h());
 
-                //Sometimes the buttons would mysteriously be double height
-                //Trying this hack to mitigate
-                let cnt = pa.children();
-                for i in 0..cnt {
-                    let mut btn = pa.child(i).unwrap();
-                    btn.set_size(0, UNIT_SPACING);
-                }
-
                 sc.resize(0, 0, inner_win_c.w(), inner_win_c.h());
 
                 reload.set_size(50, 50);
@@ -296,6 +289,14 @@ impl WeeApp {
 
                 rlfr.set_size(100, UNIT_SPACING);
                 rlfr.set_pos(10, w.h() - UNIT_SPACING);
+
+                //Sometimes the buttons would mysteriously be the wrong height
+                //Trying this hack to mitigate
+                let cnt = pa.children();
+                for i in 0..cnt {
+                    let mut btn = pa.child(i).unwrap();
+                    btn.set_size(0, UNIT_SPACING);
+                }
 
                 true
             }
@@ -406,8 +407,10 @@ impl WeeApp {
                         );
 
                         let mut but = button::Button::default()
-                            .with_size(0, UNIT_SPACING)
                             .with_label(&format!("{:?}", device.friendly_name));
+
+                        but.set_size(0, UNIT_SPACING);
+
                         if device.state == State::On {
                             but.set_color(BUTTON_ON_COLOR);
                         } else {
@@ -432,6 +435,8 @@ impl WeeApp {
 
                         self.buttons.insert(device.unique_id, but.clone());
                         self.pack.add(&but);
+
+                        info!("Message::AddButton mid <-----!");
 
                         self.force_refresh();
                     }
@@ -495,6 +500,7 @@ impl WeeApp {
                     }
                     Message::Notification(n) => {
                         info!("Message::Notification: {:?} {:?}", n.unique_id, n.state);
+
                         if let Some(btn) = self.buttons.get(&n.unique_id) {
                             if n.state == State::On {
                                 btn.clone().set_color(BUTTON_ON_COLOR);
@@ -509,13 +515,15 @@ impl WeeApp {
                 }
             }
         }
-        self.app.redraw()
     }
 }
 
 fn main() {
-    // install global collector configured based on RUST_LOG env var.
-    tracing_subscriber::fmt::init();
+    use tracing_subscriber::fmt::time;
+
+    tracing_subscriber::fmt()
+        .with_timer(time::LocalTime::rfc_3339())
+        .init();
 
     let a = WeeApp::new();
     a.run();

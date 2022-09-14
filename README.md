@@ -18,7 +18,7 @@ Searching for new devices can take 5-6 seconds but the app benefits from the cac
 * The application remembers size and position of its window. 
 
 ### Platforms
-Current version tested on Windows 11 and Linux.
+Current version tested on Windows 11 and Linux. It should build on macOS.
 
 ### Building
 

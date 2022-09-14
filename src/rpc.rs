@@ -63,8 +63,6 @@ fn rpc_run(
         .timeout(Duration::from_secs(5))
         .send()?;
 
-    info!("Response: {:?}", response);
-
     if response.status() != StatusCode::OK {
         return Err(Error::InvalidResponse(response.status()));
     }
