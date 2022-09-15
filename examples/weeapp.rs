@@ -203,18 +203,14 @@ impl WeeApp {
         );
 
         scroll.set_frame(enums::FrameType::BorderBox);
-        scroll.set_type(group::ScrollType::Vertical);
+        scroll.set_type(group::ScrollType::VerticalAlways);
         scroll.make_resizable(false);
         scroll.set_color(enums::Color::BackGround | enums::Color::from_hex(0x2e3436));
         scroll.set_scrollbar_size(SCROLL_WIDTH);
 
-        let mut pack = group::Pack::new(
-            UNIT_SPACING,
-            TOP_BAR_HEIGHT,
-            main_win.w() - 2 * UNIT_SPACING - SCROLL_WIDTH,
-            main_win.h() - 2 * UNIT_SPACING - 5,
-            "",
-        );
+        let mut pack = group::Pack::default()
+            .with_size(scroll.w() - SCROLL_WIDTH, scroll.h())
+            .center_of(&scroll);
 
         pack.set_type(group::PackType::Vertical);
         pack.set_spacing(2);
@@ -276,12 +272,7 @@ impl WeeApp {
                     w.h() - 2 * UNIT_SPACING - 5,
                 );
 
-                pa.resize(
-                    UNIT_SPACING,
-                    TOP_BAR_HEIGHT,
-                    w.w() - 2 * UNIT_SPACING - SCROLL_WIDTH,
-                    w.h() - 2 * UNIT_SPACING - 5,
-                );
+                pa.resize(sc.x(), sc.y(), sc.w() - SCROLL_WIDTH, sc.h());
 
                 reload.set_size(50, 50);
                 reload.set_pos(w.w() - UNIT_SPACING - 10, 0);
@@ -297,7 +288,7 @@ impl WeeApp {
                 let cnt = pa.children();
                 for i in 0..cnt {
                     let mut btn = pa.child(i).unwrap();
-                    btn.set_size(0, UNIT_SPACING);
+                    btn.set_size(pa.w(), UNIT_SPACING);
                 }
 
                 true
@@ -341,20 +332,15 @@ impl WeeApp {
         }
     }
 
-    // When adding buttons, they would not show, even with app.redraw().
-    // Resizing window is the only thing that works.
+    // When adding buttons, they would not show, even calling *.redraw().
+    // Resizing the pack (to same size) is the only thing that works.
     fn force_refresh(&mut self) {
-        self.pack.auto_layout();
-        self.pack.redraw();
-        self.scroll.redraw();
-
-        // It only shows the buttons if I do this, TODO figure out why...
-        self.main_win
-            .set_size(self.main_win.w(), self.main_win.h() + 5);
-        self.main_win.redraw();
-        self.main_win
-            .set_size(self.main_win.w(), self.main_win.h() - 5);
-        self.main_win.redraw();
+        self.pack.resize(
+            UNIT_SPACING,
+            TOP_BAR_HEIGHT,
+            self.scroll.w() - SCROLL_WIDTH,
+            self.scroll.h() - 5,
+        );
     }
 
     pub fn run(mut self) {
@@ -401,7 +387,7 @@ impl WeeApp {
                         let mut but = button::Button::default()
                             .with_label(&format!("{:?}", device.friendly_name));
 
-                        but.set_size(0, UNIT_SPACING);
+                        but.set_size(self.pack.w(), UNIT_SPACING);
 
                         if device.state == State::On {
                             but.set_color(BUTTON_ON_COLOR);
