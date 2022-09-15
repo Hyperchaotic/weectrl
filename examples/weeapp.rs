@@ -58,7 +58,6 @@ const SUBSCRIPTION_AUTO_RENEW: bool = true;
 const UNIT_SPACING: i32 = 40;
 const WINDOW_WIDTH: i32 = 400;
 const TOP_BAR_HEIGHT: i32 = UNIT_SPACING + 10;
-const LIST_WIDTH: i32 = WINDOW_WIDTH - 80;
 const LIST_HEIGHT: i32 = 220;
 const WINDOW_HEIGHT: i32 = LIST_HEIGHT + TOP_BAR_HEIGHT + UNIT_SPACING;
 const SCROLL_WIDTH: i32 = 15;
@@ -76,7 +75,7 @@ const CL_BTN1: &[u8] = include_bytes!("images/clear.png");
 const CL_BTN2: &[u8] = include_bytes!("images/clear_press.png");
 const CL_BTN3: &[u8] = include_bytes!("images/clear_hover.png");
 
-const WEEAPP_TITLE: &str = "WeeApp 0.9.3 (beta)";
+const WEEAPP_TITLE: &str = "WeeApp 0.9.4 (beta)";
 const CLEAR_TOOLTIP: &str = "Forget all devices and clear the on-disk list of known devices.";
 const RELOAD_TOOLTIP: &str =
     "Reload list of devices from on-disk list (if any) and then by network query.";
@@ -101,7 +100,7 @@ impl WeeApp {
 
         let (s, receiver) = app::channel();
 
-        let mut main_win = window::Window::default()
+        let mut main_win = window::DoubleWindow::default()
             .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
             .with_label(WEEAPP_TITLE);
         main_win.set_color(enums::Color::Gray0);
@@ -195,32 +194,34 @@ impl WeeApp {
             _ => false,
         });
 
-        let mut inner_win = window::Window::default()
-            .with_label("TEST RESIZE")
-            .with_size(
-                main_win.w() - 2 * UNIT_SPACING,
-                main_win.h() - 2 * UNIT_SPACING,
-            );
+        let mut scroll = group::Scroll::new(
+            UNIT_SPACING,
+            TOP_BAR_HEIGHT,
+            main_win.w() - 2 * UNIT_SPACING,
+            main_win.h() - 2 * UNIT_SPACING - 5,
+            "",
+        );
 
-        inner_win.set_pos(UNIT_SPACING, TOP_BAR_HEIGHT);
-        inner_win.set_frame(enums::FrameType::BorderBox);
-        inner_win.set_color(enums::Color::BackGround | enums::Color::from_hex(0x2e3436));
-
-        let mut scroll = group::Scroll::default().size_of_parent();
         scroll.set_frame(enums::FrameType::BorderBox);
         scroll.set_type(group::ScrollType::Vertical);
         scroll.make_resizable(false);
         scroll.set_color(enums::Color::BackGround | enums::Color::from_hex(0x2e3436));
         scroll.set_scrollbar_size(SCROLL_WIDTH);
 
-        let mut pack = group::Pack::new(0, 0, LIST_WIDTH - 15, LIST_HEIGHT, "");
+        let mut pack = group::Pack::new(
+            UNIT_SPACING,
+            TOP_BAR_HEIGHT,
+            main_win.w() - 2 * UNIT_SPACING - SCROLL_WIDTH,
+            main_win.h() - 2 * UNIT_SPACING - 5,
+            "",
+        );
+
         pack.set_type(group::PackType::Vertical);
         pack.set_spacing(2);
         pack.set_color(enums::Color::BackGround | enums::Color::Red);
 
         pack.end();
 
-        inner_win.end();
         main_win.end();
 
         let mut reloading_frame = frame::Frame::default().with_size(100, UNIT_SPACING);
@@ -231,7 +232,6 @@ impl WeeApp {
         main_win.add(&reloading_frame);
 
         let mut sc = scroll.clone();
-        let mut inner_win_c = inner_win.clone();
         let mut pa = pack.clone();
         let mut reload = btn_reload.clone();
         let mut clear = btn_clear.clone();
@@ -241,7 +241,6 @@ impl WeeApp {
 
         main_win.handle(move |w, ev| match ev {
             Event::Hide => {
-                //controller.unsubscribe_all();
                 let settings = Settings {
                     x: w.x(),
                     y: w.y(),
@@ -270,16 +269,19 @@ impl WeeApp {
             }
 
             Event::Resize => {
-                inner_win_c.resize(
+                sc.resize(
                     UNIT_SPACING,
                     TOP_BAR_HEIGHT,
                     w.w() - 2 * UNIT_SPACING,
                     w.h() - 2 * UNIT_SPACING - 5,
                 );
 
-                pa.resize(0, 0, inner_win_c.w() - SCROLL_WIDTH, inner_win_c.h());
-
-                sc.resize(0, 0, inner_win_c.w(), inner_win_c.h());
+                pa.resize(
+                    UNIT_SPACING,
+                    TOP_BAR_HEIGHT,
+                    w.w() - 2 * UNIT_SPACING - SCROLL_WIDTH,
+                    w.h() - 2 * UNIT_SPACING - 5,
+                );
 
                 reload.set_size(50, 50);
                 reload.set_pos(w.w() - UNIT_SPACING - 10, 0);
@@ -370,12 +372,7 @@ impl WeeApp {
                             info!("Message::Clear");
                             self.controller.clear(true);
                             self.buttons.clear();
-
-                            for _i in 0..self.pack.children() {
-                                let wgt = self.pack.child(0).unwrap();
-                                self.pack.remove_by_index(0);
-                                fltk::app::delete_widget(wgt);
-                            }
+                            self.pack.clear();
                             self.scroll.redraw();
                         }
                     }
@@ -384,13 +381,8 @@ impl WeeApp {
                             info!("Message::Reload");
                             self.controller.clear(false);
                             self.buttons.clear();
-
-                            for _i in 0..self.pack.children() {
-                                let wgt = self.pack.child(0).unwrap();
-                                self.pack.remove_by_index(0);
-                                fltk::app::delete_widget(wgt);
-                            }
-
+                            self.pack.clear();
+                            self.scroll.redraw();
                             self.sender.send(Message::StartDiscovery);
                         }
                     }

@@ -18,6 +18,7 @@ use crate::xml;
 use url::Url;
 use xml::Root;
 
+
 #[derive(Debug, Clone)]
 /// Notification from a device on network that binary state have changed.
 pub struct StateNotification {
