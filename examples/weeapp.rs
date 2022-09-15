@@ -332,17 +332,6 @@ impl WeeApp {
         }
     }
 
-    // When adding buttons, they would not show, even calling *.redraw().
-    // Resizing the pack (to same size) is the only thing that works.
-    fn force_refresh(&mut self) {
-        self.pack.resize(
-            UNIT_SPACING,
-            TOP_BAR_HEIGHT,
-            self.scroll.w() - SCROLL_WIDTH,
-            self.scroll.h() - 5,
-        );
-    }
-
     pub fn run(mut self) {
         while self.app.wait() {
             if let Some(msg) = self.receiver.recv() {
@@ -416,7 +405,8 @@ impl WeeApp {
 
                         info!("Message::AddButton mid <-----!");
 
-                        self.force_refresh();
+                        self.scroll.scroll_to(0, 0);
+                        self.app.redraw();
                     }
 
                     Message::Clicked(device) => {
