@@ -1145,7 +1145,7 @@ dependencies = [
 
 [[package]]
 name = "weectrl"
-version = "0.9.4"
+version = "0.9.5"
 dependencies = [
  "directories",
  "fltk",

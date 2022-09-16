@@ -76,7 +76,7 @@ const CL_BTN1: &[u8] = include_bytes!("images/clear.png");
 const CL_BTN2: &[u8] = include_bytes!("images/clear_press.png");
 const CL_BTN3: &[u8] = include_bytes!("images/clear_hover.png");
 
-const WEEAPP_TITLE: &str = "WeeApp 0.9.4 (beta)";
+const WEEAPP_TITLE: &str = "WeeApp 0.9.5 (beta)";
 const CLEAR_TOOLTIP: &str = "Forget all devices and clear the on-disk list of known devices.";
 const RELOAD_TOOLTIP: &str =
     "Reload list of devices from on-disk list (if any) and then by network query.";
