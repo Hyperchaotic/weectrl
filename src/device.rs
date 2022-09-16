@@ -141,8 +141,9 @@ impl Device {
         callback: String,
     ) {
         use std::sync::mpsc::TryRecvError;
+        use time::Duration;
 
-        let mut duration = time::Duration::from_secs((initial_seconds - 10) as u64);
+        let mut duration = Duration::from_secs((initial_seconds - 10) as u64);
 
         loop {
             thread::sleep(duration);
@@ -154,12 +155,15 @@ impl Device {
             info!("Resubscribing.");
             match rpc::subscribe(&url, initial_seconds, &callback) {
                 Ok(res) => {
-                    duration = time::Duration::from_secs((res.timeout - 10) as u64);
+                    duration = time::Duration::from_secs((res.timeout - 10) as u64); // Switch returns timeout we need to obey.
                     let mut sid_ref = device_sid.lock().expect(error::FATAL_LOCK);
                     sid_ref.clear();
                     sid_ref.push_str(&res.sid);
                 }
-                Err(_) => break,
+                Err(e) => {
+                    info!("Err: {:?}", e);
+                    continue; // Could be error due to temporary network issue, just keep trying after a bit.
+                }
             };
         }
     }

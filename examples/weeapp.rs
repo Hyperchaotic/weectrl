@@ -9,7 +9,7 @@ use tracing_subscriber;
 
 use weectrl::*;
 
-use fltk::{enums::Event, image::PngImage, prelude::*, *};
+use fltk::{enums::Color, enums::Event, image::PngImage, prelude::*, *};
 use fltk_theme::widget_schemes::fluent::colors::*;
 use fltk_theme::{SchemeType, WidgetScheme};
 use std::collections::HashMap;
@@ -56,14 +56,15 @@ const SUBSCRIPTION_DURATION: u32 = 180;
 const SUBSCRIPTION_AUTO_RENEW: bool = true;
 
 const UNIT_SPACING: i32 = 40;
+const BUTTON_HEIGHT: i32 = UNIT_SPACING;
 const WINDOW_WIDTH: i32 = 400;
 const TOP_BAR_HEIGHT: i32 = UNIT_SPACING + 10;
 const LIST_HEIGHT: i32 = 220;
 const WINDOW_HEIGHT: i32 = LIST_HEIGHT + TOP_BAR_HEIGHT + UNIT_SPACING;
 const SCROLL_WIDTH: i32 = 15;
 
-const BUTTON_ON_COLOR: enums::Color = enums::Color::from_rgb(114, 159, 207);
-const BUTTON_OFF_COLOR: enums::Color = enums::Color::from_rgb(13, 25, 38);
+const BUTTON_ON_COLOR: Color = Color::from_rgb(114, 159, 207);
+const BUTTON_OFF_COLOR: Color = Color::from_rgb(13, 25, 38);
 
 const WINDOW_ICON: &[u8] = include_bytes!("images/icon.png");
 
@@ -87,7 +88,7 @@ impl WeeApp {
         app::background2(0x00, 0x00, 0x00);
         app::foreground(0xff, 0xff, 0xff);
         app::set_color(
-            enums::Color::Selection,
+            Color::Selection,
             SELECTION_COLOR.0,
             SELECTION_COLOR.1,
             SELECTION_COLOR.2,
@@ -103,7 +104,7 @@ impl WeeApp {
         let mut main_win = window::DoubleWindow::default()
             .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
             .with_label(WEEAPP_TITLE);
-        main_win.set_color(enums::Color::Gray0);
+        main_win.set_color(Color::Gray0);
 
         let window_icon = PngImage::from_data(WINDOW_ICON).unwrap();
         main_win.set_icon(Some(window_icon));
@@ -205,7 +206,7 @@ impl WeeApp {
         scroll.set_frame(enums::FrameType::BorderBox);
         scroll.set_type(group::ScrollType::VerticalAlways);
         scroll.make_resizable(false);
-        scroll.set_color(enums::Color::BackGround | enums::Color::from_hex(0x2e3436));
+        scroll.set_color(Color::BackGround | Color::from_hex(0x2e3436));
         scroll.set_scrollbar_size(SCROLL_WIDTH);
 
         let mut pack = group::Pack::default()
@@ -214,7 +215,7 @@ impl WeeApp {
 
         pack.set_type(group::PackType::Vertical);
         pack.set_spacing(2);
-        pack.set_color(enums::Color::BackGround | enums::Color::Red);
+        pack.set_color(Color::BackGround | Color::Red);
 
         pack.end();
 
@@ -222,8 +223,8 @@ impl WeeApp {
 
         let mut reloading_frame = frame::Frame::default().with_size(100, UNIT_SPACING);
         reloading_frame.set_pos(10, WINDOW_HEIGHT - UNIT_SPACING);
-        reloading_frame.set_color(enums::Color::Black);
-        reloading_frame.set_label_color(enums::Color::Yellow);
+        reloading_frame.set_color(Color::Black);
+        reloading_frame.set_label_color(Color::Yellow);
 
         main_win.add(&reloading_frame);
 
@@ -255,11 +256,9 @@ impl WeeApp {
                 info!("Event::Show");
                 //Sometimes the buttons would mysteriously be double height
                 //Trying this hack to mitigate
-                let cnt = pa.children();
-                for i in 0..cnt {
+                for i in 0..pa.children() {
                     let mut btn = pa.child(i).unwrap();
-                    info!("Show: Btn {} size {} {}", btn.label(), btn.w(), btn.h());
-                    btn.set_size(0, UNIT_SPACING);
+                    btn.set_size(pa.w(), BUTTON_HEIGHT);
                 }
                 false
             }
@@ -285,12 +284,10 @@ impl WeeApp {
 
                 //Sometimes the buttons would mysteriously be the wrong height
                 //Trying this hack to mitigate
-                let cnt = pa.children();
-                for i in 0..cnt {
+                for i in 0..pa.children() {
                     let mut btn = pa.child(i).unwrap();
-                    btn.set_size(pa.w(), UNIT_SPACING);
+                    btn.set_size(pa.w(), BUTTON_HEIGHT);
                 }
-
                 true
             }
             _ => false,
@@ -304,8 +301,8 @@ impl WeeApp {
         let _ = std::thread::Builder::new()
             .name("APP_notifiy".to_string())
             .spawn(move || {
-                while let Ok(n) = rx.recv() {
-                    let _ = sc.send(Message::Notification(n.clone()));
+                while let Ok(notification) = rx.recv() {
+                    let _ = sc.send(Message::Notification(notification));
                 }
             });
 
@@ -376,7 +373,7 @@ impl WeeApp {
                         let mut but = button::Button::default()
                             .with_label(&format!("{:?}", device.friendly_name));
 
-                        but.set_size(self.pack.w(), UNIT_SPACING);
+                        but.set_size(self.pack.w(), BUTTON_HEIGHT);
 
                         if device.state == State::On {
                             but.set_color(BUTTON_ON_COLOR);
@@ -398,9 +395,9 @@ impl WeeApp {
                             _ => false,
                         });
 
-                        but.emit(self.sender.clone(), Message::Clicked(device.clone()));
+                        self.buttons.insert(device.unique_id.clone(), but.clone());
+                        but.emit(self.sender.clone(), Message::Clicked(device));
 
-                        self.buttons.insert(device.unique_id, but.clone());
                         self.pack.add(&but);
 
                         info!("Message::AddButton mid <-----!");
@@ -414,7 +411,7 @@ impl WeeApp {
                             "Message::Clicked {:?} {:?}",
                             device.unique_id, device.friendly_name
                         );
-                        if let Some(btn) = self.buttons.get(&device.unique_id) {
+                        if let Some(btn) = self.buttons.get_mut(&device.unique_id) {
                             let state = if btn.color() == BUTTON_ON_COLOR {
                                 State::Off
                             } else {
@@ -425,9 +422,9 @@ impl WeeApp {
                                 self.controller.set_binary_state(&device.unique_id, state)
                             {
                                 if ret_state == State::On {
-                                    btn.clone().set_color(BUTTON_ON_COLOR);
+                                    btn.set_color(BUTTON_ON_COLOR);
                                 } else {
-                                    btn.clone().set_color(BUTTON_OFF_COLOR);
+                                    btn.set_color(BUTTON_OFF_COLOR);
                                 }
                             }
                         }
@@ -469,11 +466,11 @@ impl WeeApp {
                     Message::Notification(n) => {
                         info!("Message::Notification: {:?} {:?}", n.unique_id, n.state);
 
-                        if let Some(btn) = self.buttons.get(&n.unique_id) {
+                        if let Some(btn) = self.buttons.get_mut(&n.unique_id) {
                             if n.state == State::On {
-                                btn.clone().set_color(BUTTON_ON_COLOR);
+                                btn.set_color(BUTTON_ON_COLOR);
                             } else {
-                                btn.clone().set_color(BUTTON_OFF_COLOR);
+                                btn.set_color(BUTTON_OFF_COLOR);
                             }
 
                             self.main_win.redraw();
