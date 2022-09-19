@@ -5,9 +5,8 @@
 extern crate weectrl;
 
 use tracing::info;
-use tracing_subscriber;
 
-use weectrl::*;
+use weectrl::{DeviceInfo, DiscoveryMode, State, StateNotification, WeeController};
 
 use fltk::{enums::Color, enums::Event, image::PngImage, prelude::*, *};
 use fltk_theme::widget_schemes::fluent::colors::*;
@@ -18,9 +17,6 @@ extern crate directories;
 use directories::ProjectDirs;
 
 use serde::{Deserialize, Serialize};
-use serde_json;
-
-use std;
 
 use std::fs::File;
 use std::io::prelude::*;
@@ -50,7 +46,7 @@ struct WeeApp {
     buttons: HashMap<String, button::Button>, // List of deviceID's and indexes of the associated buttons
 }
 
-const SETTINGS_FILE: &'static str = "Settings.json";
+const SETTINGS_FILE: &str = "Settings.json";
 
 const SUBSCRIPTION_DURATION: u32 = 180;
 const SUBSCRIPTION_AUTO_RENEW: bool = true;
@@ -76,7 +72,6 @@ const CL_BTN1: &[u8] = include_bytes!("images/clear.png");
 const CL_BTN2: &[u8] = include_bytes!("images/clear_press.png");
 const CL_BTN3: &[u8] = include_bytes!("images/clear_hover.png");
 
-const WEEAPP_TITLE: &str = "WeeApp 0.9.5 (beta)";
 const CLEAR_TOOLTIP: &str = "Forget all devices and clear the on-disk list of known devices.";
 const RELOAD_TOOLTIP: &str =
     "Reload list of devices from on-disk list (if any) and then by network query.";
@@ -101,9 +96,12 @@ impl WeeApp {
 
         let (s, receiver) = app::channel();
 
+        // get version number from Cargp.toml
+        let version = env!("CARGO_PKG_VERSION");
+
         let mut main_win = window::DoubleWindow::default()
             .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
-            .with_label(WEEAPP_TITLE);
+            .with_label(&format!("WeeApp {} (beta)", version));
         main_win.set_color(Color::Gray0);
 
         let window_icon = PngImage::from_data(WINDOW_ICON).unwrap();
@@ -130,12 +128,7 @@ impl WeeApp {
         btn_clear.set_tooltip(CLEAR_TOOLTIP);
 
         btn_clear.handle(move |b, e| match e {
-            Event::Enter => {
-                b.set_image(Some(ich.clone()));
-                b.redraw();
-                true
-            }
-            Event::Released => {
+            Event::Enter | Event::Released => {
                 b.set_image(Some(ich.clone()));
                 b.redraw();
                 true
@@ -173,12 +166,7 @@ impl WeeApp {
         btn_reload.emit(s.clone(), Message::Reload);
 
         btn_reload.handle(move |b, e| match e {
-            Event::Enter => {
-                b.set_image(Some(irh.clone()));
-                b.redraw();
-                true
-            }
-            Event::Released => {
+            Event::Enter | Event::Released => {
                 b.set_image(Some(irh.clone()));
                 b.redraw();
                 true
@@ -298,13 +286,14 @@ impl WeeApp {
         let rx = controller.start_subscription_service().unwrap();
         let sc = s.clone();
 
-        let _ = std::thread::Builder::new()
+        let _ignore = std::thread::Builder::new()
             .name("APP_notifiy".to_string())
             .spawn(move || {
                 while let Ok(notification) = rx.recv() {
-                    let _ = sc.send(Message::Notification(notification));
+                    sc.send(Message::Notification(notification));
                 }
-            });
+            })
+            .unwrap();
 
         main_win.show();
 
@@ -316,14 +305,14 @@ impl WeeApp {
         }
 
         Self {
-            app: app,
-            main_win: main_win,
-            pack: pack,
-            scroll: scroll,
-            reloading_frame: reloading_frame,
+            app,
+            main_win,
+            pack,
+            scroll,
+            reloading_frame,
             sender: s,
-            receiver: receiver,
-            controller: controller,
+            receiver,
+            controller,
             discovering: true,
             buttons: HashMap::new(),
         }
@@ -364,7 +353,7 @@ impl WeeApp {
                             "Message::AddButton {:?} {:?}",
                             device.unique_id, device.friendly_name
                         );
-                        let _ = self.controller.subscribe(
+                        let _ignore = self.controller.subscribe(
                             &device.unique_id,
                             SUBSCRIPTION_DURATION,
                             SUBSCRIPTION_AUTO_RENEW,
@@ -441,21 +430,22 @@ impl WeeApp {
                             false,
                             5,
                         );
-                        let _ = std::thread::Builder::new()
+                        let _ignore = std::thread::Builder::new()
                             .name("APP_discovery".to_string())
                             .spawn(move || {
                                 loop {
                                     let msg = rx.recv();
                                     info!("Discover thread forwarding");
-                                    match msg {
-                                        Ok(dev) => s.send(Message::AddButton(dev)),
-                                        Err(_) => {
-                                            s.send(Message::EndDiscovery);
-                                            break; // End thread
-                                        }
+
+                                    if let Ok(dev) = msg {
+                                        s.send(Message::AddButton(dev));
+                                    } else {
+                                        s.send(Message::EndDiscovery);
+                                        break; // End thread
                                     }
                                 }
-                            });
+                            })
+                            .unwrap();
                     }
 
                     Message::EndDiscovery => {
@@ -474,7 +464,7 @@ impl WeeApp {
                             }
 
                             self.main_win.redraw();
-                            self.app.redraw()
+                            self.app.redraw();
                         }
                     }
                 }
@@ -494,7 +484,7 @@ fn main() {
     a.run();
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
     x: i32,
     y: i32,
@@ -506,8 +496,15 @@ pub struct Storage {
     cache_file: Option<std::path::PathBuf>,
 }
 
+impl Default for Storage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Storage {
-    pub fn new() -> Storage {
+    #[must_use]
+    pub fn new() -> Self {
         let mut file_path: Option<std::path::PathBuf> = None;
 
         if let Some(proj_dirs) = ProjectDirs::from("", "", "WeeApp") {
@@ -516,7 +513,7 @@ impl Storage {
             file_path = Some(path);
             info!("Settings file: {:#?}", file_path);
         }
-        Storage {
+        Self {
             cache_file: file_path,
         }
     }
@@ -526,11 +523,11 @@ impl Storage {
         if let Some(ref fpath) = self.cache_file {
             let data = settings;
             if let Some(prefix) = fpath.parent() {
-                let _ = std::fs::create_dir_all(prefix);
+                let _ignore = std::fs::create_dir_all(prefix);
 
                 if let Ok(serialized) = serde_json::to_string(&data) {
                     if let Ok(mut buffer) = File::create(fpath) {
-                        let _ = buffer.write_all(&serialized.into_bytes());
+                        let _ignore = buffer.write_all(&serialized.into_bytes());
                     }
                 }
             }
@@ -541,7 +538,7 @@ impl Storage {
         if let Some(ref fpath) = self.cache_file {
             if let Ok(mut file) = File::open(fpath) {
                 let mut s = String::new();
-                let _ = file.read_to_string(&mut s);
+                let _ignore = file.read_to_string(&mut s);
                 let data: Option<Settings> = serde_json::from_str(&s).ok();
                 return data;
             }
@@ -551,7 +548,7 @@ impl Storage {
 
     pub fn clear(&self) {
         if let Some(ref fpath) = self.cache_file {
-            let _ = std::fs::remove_file(fpath);
+            let _ignore = std::fs::remove_file(fpath);
         }
     }
 }

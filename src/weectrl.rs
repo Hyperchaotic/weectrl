@@ -3,7 +3,6 @@ use tracing::info;
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 
 use std::net::UdpSocket;
@@ -18,7 +17,6 @@ use crate::xml;
 use url::Url;
 use xml::Root;
 
-
 #[derive(Debug, Clone)]
 /// Notification from a device on network that binary state have changed.
 pub struct StateNotification {
@@ -31,14 +29,14 @@ pub struct StateNotification {
 impl From<u8> for State {
     fn from(u: u8) -> Self {
         match u {
-            0 => State::Off,
-            1 => State::On,
-            _ => State::Unknown,
+            0 => Self::Off,
+            1 => Self::On,
+            _ => Self::Unknown,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Specify the methods to be used for device discovery.
 pub enum DiscoveryMode {
     /// Read and verify known devices from disk cache. Don't brodcast uPnP query.
@@ -50,7 +48,7 @@ pub enum DiscoveryMode {
     BroadcastOnly,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Model {
     Lightswitch,
     Socket,
@@ -58,16 +56,16 @@ pub enum Model {
 }
 
 impl<'a> From<&'a str> for Model {
-    fn from(string: &'a str) -> Model {
+    fn from(string: &'a str) -> Self {
         match string {
-            "LightSwitch" => Model::Lightswitch,
-            "Socket" => Model::Socket,
-            _ => Model::Unknown(string.to_owned()),
+            "LightSwitch" => Self::Lightswitch,
+            "Socket" => Self::Socket,
+            _ => Self::Unknown(string.to_owned()),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Represents whether a device binarystate is on or off.
 pub enum State {
     /// Device is switched on
@@ -77,6 +75,20 @@ pub enum State {
     /// Device is not responding to queries or commands
     Unknown,
 }
+
+impl std::fmt::Display for State {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+
+        match *self {
+            Self::On => f.write_str(xml::SETBINARYSTATEON),
+            Self::Off => f.write_str(xml::SETBINARYSTATEOFF),
+            Self::Unknown => f.write_str("UNKNOWN STATE"),
+        }                    
+    }
+}
+
+
+
 
 #[derive(Debug, Clone)]
 pub struct Icon {
@@ -112,19 +124,26 @@ pub struct DeviceInfo {
 pub struct WeeController {
     cache: Arc<Mutex<DiskCache>>,
     devices: Arc<Mutex<HashMap<String, Device>>>,
-    subscription_daemon: Arc<AtomicBool>,
+    subscription_daemon: Arc<Mutex<bool>>,
     port: u16,
 }
 
-impl WeeController {
-    pub fn new() -> WeeController {
-        // Find a free port number between 8000-9000
-        let available_port = WeeController::get_available_port().unwrap();
+impl Default for WeeController {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
-        let object = WeeController {
+impl WeeController {
+    #[must_use]
+    pub fn new() -> Self {
+        // Find a free port number between 8000-9000
+        let available_port = Self::get_available_port().unwrap();
+
+        let object = Self {
             cache: Arc::new(Mutex::new(DiskCache::new())),
             devices: Arc::new(Mutex::new(HashMap::new())),
-            subscription_daemon: Arc::new(AtomicBool::new(false)),
+            subscription_daemon: Arc::new(Mutex::new(false)),
             port: available_port,
         };
 
@@ -164,23 +183,23 @@ impl WeeController {
     }
 
     // Write list of active devices to disk cache
-    fn refresh_cache(cache: Arc<Mutex<DiskCache>>, devices: Arc<Mutex<HashMap<String, Device>>>) {
+    fn refresh_cache(cache: &Arc<Mutex<DiskCache>>, devices: &Arc<Mutex<HashMap<String, Device>>>) {
         info!("Refreshing cache.");
         let mut list = Vec::new();
         for (mac, dev) in devices.lock().expect(FATAL_LOCK).iter() {
             let location = dev.info.location.clone();
             list.push(DeviceAddress {
-                location: location,
+                location,
                 mac_address: mac.clone(),
-            })
+            });
         }
         cache.lock().expect(FATAL_LOCK).write(list);
     }
 
     // Given location URL, query a device. If successful add to list of active devices
     fn retrieve_device(location: &str) -> Result<Device, Error> {
-        let body = WeeController::get_device_home(location)?;
-        let local_ip = WeeController::get_local_ip(location)?;
+        let body = Self::get_device_home(location)?;
+        let local_ip = Self::get_local_ip(location)?;
         let root: Root = xml::parse_services(&body)?;
 
         info!("Device {:?} {:?} ", root.device.friendly_name, location);
@@ -195,21 +214,19 @@ impl WeeController {
         let model = root.device.model_name.clone();
         let model_str: &str = &model;
         let info = DeviceInfo {
-            friendly_name: root.device.friendly_name.to_owned(),
+            friendly_name: root.device.friendly_name.clone(),
             model: Model::from(model_str),
-            unique_id: root.device.mac_address.to_owned(),
-            hostname: hostname,
+            unique_id: root.device.mac_address.clone(),
+            hostname,
             base_url: base_url.to_string(),
-            location: location.to_owned(),
+            location: location.to_string(),
             state: State::Unknown,
-            root: root,
+            root,
         };
         let mut dev = Device::new(info, local_ip);
 
-        if dev.validate_device() {
-            if dev.fetch_binary_state().ok().is_some() {
-                return Ok(dev);
-            }
+        if dev.validate_device() && dev.fetch_binary_state().ok().is_some() {
+            return Ok(dev);
         }
 
         info!("Device not supported.");
@@ -221,16 +238,17 @@ impl WeeController {
         location: &str,
         devices: &Arc<Mutex<HashMap<String, Device>>>,
     ) -> Result<DeviceInfo, Error> {
-        let newdev = WeeController::retrieve_device(location)?;
+        let newdev = Self::retrieve_device(location)?;
         let mut devs = devices.lock().expect(FATAL_LOCK);
         let unique_id = newdev.info.root.device.mac_address.clone();
 
-        if !devs.contains_key(&unique_id) {
+        if let std::collections::hash_map::Entry::Vacant(e) = devs.entry(unique_id) {
             info!("Registering dev: {:?}", newdev.sid());
             let info = newdev.info.clone();
-            devs.insert(unique_id.to_owned(), newdev);
+            e.insert(newdev);
             return Ok(info);
         }
+
         Err(Error::DeviceAlreadyRegistered)
     }
 
@@ -249,12 +267,8 @@ impl WeeController {
         let receiver = self.discover_async(mode, forget_devices, mx);
         let mut list = Vec::new();
 
-        loop {
-            if let Some(device) = receiver.recv().ok() {
-                list.push(device);
-            } else {
-                break;
-            }
+        while let Ok(device) = receiver.recv() {
+            list.push(device);
         }
 
         if list.is_empty() {
@@ -312,19 +326,19 @@ impl WeeController {
     pub fn unsubscribe_all(&mut self) {
         info!("unsubscribe_all.");
         let mut devices = self.devices.lock().expect(FATAL_LOCK);
-        let unique_ids: Vec<String> = devices.keys().map(|d| d.clone()).collect();
+        let unique_ids: Vec<String> = devices.keys().cloned().collect();
         for unique_id in unique_ids {
             if let Entry::Occupied(mut o) = devices.entry(unique_id.clone()) {
                 let device = o.get_mut();
                 info!("unsubscribe {:?}.", unique_id);
-                let _ = device.unsubscribe();
+                let _ignore = device.unsubscribe();
             }
         }
     }
 
     /// Cancel subscription for notifications from a device.
-    pub fn unsubscribe(&mut self, unique_id: &str) -> Result<(), Error> {
-        if !self.subscription_daemon.load(Ordering::Relaxed) {
+    pub fn unsubscribe(&mut self, unique_id: &str) -> Result<String, Error> {
+        if !*(*self.subscription_daemon).lock().expect(FATAL_LOCK) {
             return Err(Error::ServiceNotRunning);
         }
 
@@ -333,7 +347,7 @@ impl WeeController {
             let device = o.get_mut();
 
             info!("unsubscribe {:?}.", unique_id);
-            let _ = device.unsubscribe()?;
+            return device.unsubscribe();
         }
         Err(Error::UnknownDevice)
     }
@@ -348,7 +362,7 @@ impl WeeController {
         seconds: u32,
         auto_resubscribe: bool,
     ) -> Result<u32, Error> {
-        if !self.subscription_daemon.load(Ordering::Relaxed) {
+        if !*(*self.subscription_daemon).lock().expect(FATAL_LOCK) {
             info!("Subscribe: ServiceNotRunning");
             return Err(Error::ServiceNotRunning);
         }
@@ -398,12 +412,11 @@ impl WeeController {
                     if let Some(cache_list) = cache.lock().expect(error::FATAL_LOCK).read() {
                         info!("Cached devices {:?}", cache_list);
 
-                        for cache_entry in cache_list.into_iter() {
+                        for cache_entry in cache_list {
                             let device =
-                                WeeController::register_device(&cache_entry.location, &devices)
-                                    .ok();
+                                Self::register_device(&cache_entry.location, &devices).ok();
                             if let Some(new) = device {
-                                let _ = tx.send(new);
+                                let _ignore = tx.send(new);
                             }
                         }
                     }
@@ -417,14 +430,14 @@ impl WeeController {
                     let devices = devices.clone(); // to move into the new thread
                     let mut cache_dirty = false;
 
-                    let bind_address = WeeController::get_bind_addr().unwrap();
+                    let bind_address = Self::get_bind_addr().unwrap();
                     let socket = UdpSocket::bind(&bind_address).unwrap();
 
-                    WeeController::send_sddp_request(&socket, mx);
+                    Self::send_sddp_request(&socket, mx);
 
                     let mut buf = [0u8; 2048];
                     socket
-                        .set_read_timeout(Some(Duration::from_secs((mx + 1) as u64)))
+                        .set_read_timeout(Some(Duration::from_secs(u64::from(mx + 1))))
                         .unwrap();
 
                     let (cache_dirt_tx, cache_dirt_rx) = mpsc::channel();
@@ -437,35 +450,36 @@ impl WeeController {
                         let devs = devices.clone();
                         let nx = tx.clone();
                         let cache_dirt = cache_dirt_tx.clone();
-                        num_threads = num_threads + 1;
+                        num_threads += 1;
 
-                        let _ = std::thread::Builder::new()
+                        let _ignore = std::thread::Builder::new()
                             .name(format!("SSDP_handle_msg {}", num_threads).to_string())
                             .spawn(move || {
-                                if let Some(location) = WeeController::parse_ssdp_response(&message)
-                                {
-                                    let device =
-                                        WeeController::register_device(&location, &devs).ok();
+                                if let Some(location) = Self::parse_ssdp_response(&message) {
+                                    let device = Self::register_device(&location, &devs).ok();
 
-                                    if let Some(new) = device {
-                                        let _ = nx.send(new);
-                                        let _ = cache_dirt.send(true);
-                                    } else {
-                                        let _ = cache_dirt.send(false);
-                                    }
+                                    device.map_or_else(
+                                        || {
+                                            let _ignore = cache_dirt.send(false);
+                                        },
+                                        |new| {
+                                            let _ignore = nx.send(new);
+                                            let _ignore = cache_dirt.send(true);
+                                        },
+                                    );
                                 }
                             });
                     }
 
                     for _ in 0..num_threads {
-                        if cache_dirt_rx.recv().unwrap() == true {
+                        if cache_dirt_rx.recv().unwrap() {
                             info!("CACHE DIRTY");
                             cache_dirty = true;
                         }
                     }
 
                     if cache_dirty {
-                        WeeController::refresh_cache(cache, devices);
+                        Self::refresh_cache(&cache, &devices);
                     }
                 }
 
@@ -479,23 +493,24 @@ impl WeeController {
     pub fn start_subscription_service(
         &mut self,
     ) -> Result<mpsc::Receiver<StateNotification>, error::Error> {
+        let mut running = self.subscription_daemon.lock().expect(FATAL_LOCK);
+
         let mut res = Err(Error::ServiceAlreadyRunning);
-        let mutex = Mutex::new(0);
+
         {
-            let _ = mutex.lock().unwrap();
             // Start daemon listening for subscription updates, if not running.
-            if !self.subscription_daemon.load(Ordering::Relaxed) {
+            if !*running {
                 let port = self.port;
                 let (tx, rx) = mpsc::channel();
                 let devices = self.devices.clone();
 
-                let _ = std::thread::Builder::new()
+                let _ignore = std::thread::Builder::new()
                     .name("SUB_server".to_string())
                     .spawn(move || {
-                        WeeController::subscription_server(tx, devices, port);
+                        Self::subscription_server(&tx, &devices, port);
                     });
-                self.subscription_daemon.store(true, Ordering::Relaxed);
                 res = Ok(rx);
+                *running = true;
             }
         }
         res
@@ -503,8 +518,8 @@ impl WeeController {
 
     // This daemon will run until the process ends, listening for notifications.
     fn subscription_server(
-        tx: mpsc::Sender<StateNotification>,
-        devices: Arc<Mutex<HashMap<String, Device>>>,
+        tx: &mpsc::Sender<StateNotification>,
+        devices: &Arc<Mutex<HashMap<String, Device>>>,
         port: u16,
     ) {
         let addr: SocketAddr = ([0, 0, 0, 0], port).into();
@@ -525,14 +540,14 @@ impl WeeController {
             };
 
             // Just for debug info
-            thread_count = thread_count + 1;
+            thread_count += 1;
             let thread_number = thread_count;
 
             let devices = devices.clone();
             let tx = tx.clone();
 
             //Spawning off a thread for the connection.
-            let _ = std::thread::Builder::new()
+            let _ignore = std::thread::Builder::new()
             .name("SUBSRV_handle_msg".to_string())
             .spawn(move || {
                 let mut full_message = String::new();
@@ -550,11 +565,11 @@ impl WeeController {
                     if str.find("</e:propertyset>") != None {
                         // Extract SID and BinaryState
                         if let Some((notification_sid, state)) =
-                            WeeController::get_sid_and_state(&full_message)
+                            Self::get_sid_and_state(&full_message)
                         {
                             // If we have mathing SID, register and forward statechange
-                            'search: for (unique_id, dev) in
-                                devices.lock().expect("FATAL_LOCK").iter()
+                            let devs = devices.lock().expect("FATAL_LOCK"); 
+                            'search: for (unique_id, dev) in devs.iter() 
                             {
                                 if let Some(device_sid) = dev.sid() {
                                     // Found a match, send notification to the client
@@ -568,7 +583,7 @@ impl WeeController {
                                         );
 
                                         let n = StateNotification {
-                                            unique_id: unique_id.to_owned(),
+                                            unique_id: unique_id.clone(),
                                             state: State::from(state),
                                         };
 
@@ -600,7 +615,7 @@ impl WeeController {
             }
         }
 
-        let state = xml::get_binary_state(&message);
+        let state = xml::get_binary_state(message);
 
         if sid != None && state != None {
             return Some((sid.unwrap(), state.unwrap()));
@@ -609,14 +624,11 @@ impl WeeController {
     }
 
     fn port_is_available(port: u16) -> bool {
-        match TcpListener::bind(("127.0.0.1", port)) {
-            Ok(_) => true,
-            Err(_) => false,
-        }
+        TcpListener::bind(("127.0.0.1", port)).is_ok()
     }
 
     fn get_available_port() -> Option<u16> {
-        (8000..9000).find(|port| WeeController::port_is_available(*port))
+        (8000..9000).find(|port| Self::port_is_available(*port))
     }
 
     // Bind through a connected interface
@@ -624,7 +636,7 @@ impl WeeController {
         let any: SocketAddr = ([0, 0, 0, 0], 0).into();
         let dns: SocketAddr = ([1, 1, 1, 1], 80).into();
         let socket = UdpSocket::bind(any)?;
-        let _ = socket.connect(dns);
+        socket.connect(dns)?;
         let bind_addr = socket.local_addr()?;
 
         Ok(bind_addr)
@@ -642,12 +654,10 @@ impl WeeController {
                 if y.eq_ignore_ascii_case("location") {
                     if let Some(location) = split.next() {
                         return Some(location.trim().to_string());
-                    } else {
-                        break;
                     }
-                } else {
-                    let _ = split.next();
+                    break;
                 }
+                let _ = split.next();
             } else {
                 break;
             }

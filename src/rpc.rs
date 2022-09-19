@@ -81,7 +81,7 @@ fn rpc_run(
 
     Ok(RpcResponse {
         status: response.status(),
-        sid: sid,
+        sid,
         timeout: tim,
     })
 }
@@ -133,18 +133,12 @@ fn handle_subscription_response(response: RpcResponse) -> Result<SubscribeRespon
 
     let timeout = if timeout_string.starts_with("Second-") {
         let (_, number) = timeout_string.split_at("Second-".len());
-        match number.parse::<u32>() {
-            Ok(n) => n,
-            Err(_) => 0,
-        }
+        number.parse::<u32>().unwrap_or(0)
     } else {
         0
     };
 
-    Ok(SubscribeResponse {
-        sid: sid,
-        timeout: timeout,
-    })
+    Ok(SubscribeResponse { sid, timeout })
 }
 
 /// Perform a HTTP SOAP action to specified URL.

@@ -28,14 +28,14 @@ pub struct Device {
 }
 
 impl Device {
-    pub fn new(info: DeviceInfo, local_ip: IpAddr) -> Device {
-        let dev = Device {
-            local_ip: local_ip,
+    pub fn new(info: DeviceInfo, local_ip: IpAddr) -> Self {
+        let dev = Self {
+            local_ip,
             binary_control_path: None,
             event_path: None,
             sid: None,
             subscription_daemon: None,
-            info: info,
+            info,
         };
         info!(
             "New device {}, {} @ {}",
@@ -80,7 +80,7 @@ impl Device {
         self.cancel_subscription_daemon();
 
         if let Some(sid_shared) = self.sid.clone() {
-            let req_url = Device::make_request_url(&self.info.base_url, &self.event_path)?;
+            let req_url = Self::make_request_url(&self.info.base_url, &self.event_path)?;
             let sid = sid_shared.lock().expect(error::FATAL_LOCK).clone();
             let _ = rpc::unsubscribe_action(&req_url, &sid)?; // TODO check statuscode
             self.sid = None;
@@ -112,7 +112,7 @@ impl Device {
     ) -> Result<(String, u32), Error> {
         info!("Subscribe");
         let callback = format!("<http://{}:{}/>", self.local_ip, port);
-        let req_url = Device::make_request_url(&self.info.base_url, &self.event_path)?;
+        let req_url = Self::make_request_url(&self.info.base_url, &self.event_path)?;
         self.cancel_subscription_daemon();
         let res = rpc::subscribe(&req_url, seconds, &callback)?;
 
@@ -123,27 +123,27 @@ impl Device {
             let (tx, rx) = mpsc::channel();
             self.subscription_daemon = Some(tx);
 
-            let _ = std::thread::Builder::new()
-                .name(format!("DEV_resub_thread {}", self.info.friendly_name).to_string())
+            std::thread::Builder::new()
+                .name(format!("DEV_resub_thread {}", self.info.friendly_name))
                 .spawn(move || {
-                    Device::subscription_daemon(rx, req_url, new_sid, seconds, callback);
-                });
+                    Self::subscription_daemon(&rx, &req_url, &new_sid, seconds, &callback);
+                })?;
         }
 
         Ok((res.sid, res.timeout))
     }
 
     fn subscription_daemon(
-        rx: mpsc::Receiver<()>,
-        url: String,
-        device_sid: Arc<Mutex<String>>,
+        rx: &mpsc::Receiver<()>,
+        url: &str,
+        device_sid: &Arc<Mutex<String>>,
         initial_seconds: u32,
-        callback: String,
+        callback: &str,
     ) {
         use std::sync::mpsc::TryRecvError;
         use time::Duration;
 
-        let mut duration = Duration::from_secs((initial_seconds - 10) as u64);
+        let mut duration = Duration::from_secs(u64::from(initial_seconds - 10));
 
         loop {
             thread::sleep(duration);
@@ -153,9 +153,9 @@ impl Device {
                 _ => break,
             }
             info!("Resubscribing.");
-            match rpc::subscribe(&url, initial_seconds, &callback) {
+            match rpc::subscribe(url, initial_seconds, callback) {
                 Ok(res) => {
-                    duration = time::Duration::from_secs((res.timeout - 10) as u64); // Switch returns timeout we need to obey.
+                    duration = time::Duration::from_secs(u64::from(res.timeout - 10)); // Switch returns timeout we need to obey.
                     let mut sid_ref = device_sid.lock().expect(error::FATAL_LOCK);
                     sid_ref.clear();
                     sid_ref.push_str(&res.sid);
@@ -179,15 +179,15 @@ impl Device {
             let height = xmlicon.height.parse::<u64>()?;
             let depth = xmlicon.depth.parse::<u64>()?;
 
-            let req_file = Some(xmlicon.url.to_owned());
-            let req_url = Device::make_request_url(&self.info.base_url, &req_file)?;
+            let req_file = Some(xmlicon.url.clone());
+            let req_url = Self::make_request_url(&self.info.base_url, &req_file)?;
             let data = rpc::http_get(&req_url)?;
             let icon = Icon {
-                mimetype: xmlicon.mimetype.to_owned(),
-                width: width,
-                height: height,
-                depth: depth,
-                data: data,
+                mimetype: xmlicon.mimetype.clone(),
+                width,
+                height,
+                depth,
+                data,
             };
             icon_list.push(icon);
         }
@@ -199,7 +199,7 @@ impl Device {
     pub fn fetch_binary_state(&mut self) -> Result<State, Error> {
         self.info.state = State::Unknown;
 
-        let req_url = Device::make_request_url(&self.info.base_url, &self.binary_control_path)?;
+        let req_url = Self::make_request_url(&self.info.base_url, &self.binary_control_path)?;
 
         let http_response = rpc::soap_action(
             &req_url,
@@ -218,17 +218,16 @@ impl Device {
 
     /// Send command to toggle switch state. If toggeling to same state an Error is returned.
     pub fn set_binary_state(&mut self, state: State) -> Result<State, Error> {
-        let request: &str;
-        match state {
-            State::On => request = xml::SETBINARYSTATEON,
-            State::Off => request = xml::SETBINARYSTATEOFF,
-            State::Unknown => return Err(Error::InvalidState),
+        if state == State::Unknown {
+            return Err(Error::InvalidState);
         }
-        let req_url = Device::make_request_url(&self.info.base_url, &self.binary_control_path)?;
-        let _ = rpc::soap_action(
+
+        let req_url = Self::make_request_url(&self.info.base_url, &self.binary_control_path)?;
+
+        rpc::soap_action(
             &req_url,
             "\"urn:Belkin:service:basicevent:1#SetBinaryState\"",
-            request,
+            &state.to_string(),
         )?;
 
         self.info.state = state;

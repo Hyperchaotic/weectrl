@@ -4,14 +4,11 @@ use directories::ProjectDirs;
 use tracing::info;
 
 use serde::{Deserialize, Serialize};
-use serde_json;
-
-use std;
 
 use std::fs::File;
 use std::io::prelude::*;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceAddress {
     pub location: String,
     pub mac_address: String,
@@ -22,7 +19,7 @@ struct CacheData {
     pub cache: Vec<DeviceAddress>,
 }
 
-const CACHE_FILE: &'static str = "IPCache.dat";
+const CACHE_FILE: &str = "IPCache.dat";
 
 /// Disk cache of IP addresses of WeMo devices
 /// WeMo doesn't always answer broadcast upnp, this cache allows
@@ -32,7 +29,7 @@ pub struct DiskCache {
 }
 
 impl DiskCache {
-    pub fn new() -> DiskCache {
+    pub fn new() -> Self {
         let mut file_path: Option<std::path::PathBuf> = None;
 
         if let Some(proj_dirs) = ProjectDirs::from("", "", "WeeCtrl") {
@@ -41,21 +38,22 @@ impl DiskCache {
             file_path = Some(path);
             info!("Cache file: {:#?}", file_path);
         }
-        DiskCache {
+        Self {
             cache_file: file_path,
         }
     }
 
-    /// Write data to cache, errors ignored
+    /// Write data to cache, errors ignored as everything will still work
+    /// without a cache, just slower.
     pub fn write(&self, addresses: Vec<DeviceAddress>) {
         if let Some(ref fpath) = self.cache_file {
             let data = CacheData { cache: addresses };
             if let Some(prefix) = fpath.parent() {
-                let _ = std::fs::create_dir_all(prefix);
+                let _ignore = std::fs::create_dir_all(prefix);
 
                 if let Ok(serialized) = serde_json::to_string(&data) {
                     if let Ok(mut buffer) = File::create(fpath) {
-                        let _ = buffer.write_all(&serialized.into_bytes());
+                        let _ignore = buffer.write_all(&serialized.into_bytes());
                     }
                 }
             }
@@ -66,7 +64,7 @@ impl DiskCache {
         if let Some(ref fpath) = self.cache_file {
             if let Ok(mut file) = File::open(fpath) {
                 let mut s = String::new();
-                let _ = file.read_to_string(&mut s);
+                let _ignore = file.read_to_string(&mut s);
                 let cachedata: Option<CacheData> = serde_json::from_str(&s).ok();
                 if let Some(data) = cachedata {
                     return Some(data.cache);
@@ -78,7 +76,7 @@ impl DiskCache {
 
     pub fn clear(&self) {
         if let Some(ref fpath) = self.cache_file {
-            let _ = std::fs::remove_file(fpath);
+            let _ignore = std::fs::remove_file(fpath);
         }
     }
 }

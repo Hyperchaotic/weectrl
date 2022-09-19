@@ -1,7 +1,6 @@
 pub use crate::error::Error;
 
 use serde::Deserialize;
-use serde_xml_rs;
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename = "service")]
@@ -109,7 +108,7 @@ pub fn get_binary_state(data: &str) -> Option<u8> {
     None
 }
 
-pub const SETBINARYSTATEOFF: &'static str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>
+pub const SETBINARYSTATEOFF: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>
 <s:Envelope \
      xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" \
      s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">
@@ -122,7 +121,7 @@ pub const SETBINARYSTATEOFF: &'static str = "<?xml version=\"1.0\" encoding=\"ut
   </s:Body>
 </s:Envelope>";
 
-pub const SETBINARYSTATEON: &'static str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>
+pub const SETBINARYSTATEON: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>
 <s:Envelope \
      xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" \
      s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">
@@ -135,7 +134,7 @@ pub const SETBINARYSTATEON: &'static str = "<?xml version=\"1.0\" encoding=\"utf
   </s:Body>
 </s:Envelope>";
 
-pub const GETBINARYSTATE: &'static str = "
+pub const GETBINARYSTATE: &str = "
 <?xml version=\"1.0\" encoding=\"utf-8\"?>
 <s:Envelope \
      xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" \
