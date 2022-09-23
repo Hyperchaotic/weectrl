@@ -1,6 +1,5 @@
-// On Windows don't create terminal window when opening app in GUI
-
-#![windows_subsystem = "windows"]
+// On Windows don't create terminal window when opening app in release mode GUI
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 extern crate weectrl;
 
@@ -23,7 +22,6 @@ use std::io::prelude::*;
 
 #[derive(Debug, Clone)]
 enum Message {
-    Resize(Settings),
     Reload,
     Clear,
     StartDiscovery,
@@ -35,14 +33,13 @@ enum Message {
 
 struct WeeApp {
     app: app::App,
-    main_win: window::Window,
     scroll: group::Scroll,
     pack: group::Pack,
     reloading_frame: frame::Frame,
     sender: app::Sender<Message>,
     receiver: app::Receiver<Message>,
     controller: WeeController,
-    discovering: bool,                        // Is dicover currently in progress?
+    discovering: bool,                        // Is discover currently in progress?
     buttons: HashMap<String, button::Button>, // List of deviceID's and indexes of the associated buttons
 }
 
@@ -94,19 +91,31 @@ impl WeeApp {
 
         app::set_font_size(18);
 
-        let (s, receiver) = app::channel();
+        let (sender, receiver) = app::channel();
 
         // get version number from Cargp.toml
         let version = env!("CARGO_PKG_VERSION");
 
-        let mut main_win = window::DoubleWindow::default()
-            .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
-            .with_label(&format!("WeeApp {} (beta)", version));
+        // Create main Application window. Double buffered.
+        let mut main_win =
+            window::DoubleWindow::default().with_label(&format!("WeeApp {} (beta)", version));
+
+        // Set app size/position to saved values, or use defaults
+        // If no position is set the OS decides.
+        let storage = Storage::new();
+        if let Some(settings) = storage.read() {
+            main_win.set_size(settings.w, settings.h);
+            main_win.set_pos(settings.x, settings.y);
+        } else {
+            main_win.set_size(WINDOW_WIDTH, WINDOW_HEIGHT);
+        }
+
         main_win.set_color(Color::Gray0);
 
         let window_icon = PngImage::from_data(WINDOW_ICON).unwrap();
         main_win.set_icon(Some(window_icon));
 
+        // Load all the images for clear/reload buttons
         let mut image_clear = PngImage::from_data(CL_BTN1).unwrap();
         image_clear.scale(50, 50, true, true);
 
@@ -124,7 +133,7 @@ impl WeeApp {
         let ic = image_clear.clone();
         let icc = image_clear_click.clone();
         let ich = image_clear_hover.clone();
-        btn_clear.emit(s.clone(), Message::Clear);
+        btn_clear.emit(sender.clone(), Message::Clear);
         btn_clear.set_tooltip(CLEAR_TOOLTIP);
 
         btn_clear.handle(move |b, e| match e {
@@ -163,7 +172,7 @@ impl WeeApp {
         let irc = image_reload_click.clone();
         let irh = image_reload_hover.clone();
         btn_reload.set_tooltip(RELOAD_TOOLTIP);
-        btn_reload.emit(s.clone(), Message::Reload);
+        btn_reload.emit(sender.clone(), Message::Reload);
 
         btn_reload.handle(move |b, e| match e {
             Event::Enter | Event::Released => {
@@ -209,6 +218,7 @@ impl WeeApp {
 
         main_win.end();
 
+        // The part that says "Searching..." when looking for new switches on the LAN
         let mut reloading_frame = frame::Frame::default().with_size(100, UNIT_SPACING);
         reloading_frame.set_pos(10, WINDOW_HEIGHT - UNIT_SPACING);
         reloading_frame.set_color(Color::Black);
@@ -225,6 +235,7 @@ impl WeeApp {
         let mut controller = WeeController::new();
 
         main_win.handle(move |w, ev| match ev {
+            // When quitting the App save Windows size/position
             Event::Hide => {
                 let settings = Settings {
                     x: w.x(),
@@ -251,6 +262,7 @@ impl WeeApp {
                 false
             }
 
+            // When resizing the App window, reposition internal elements accordingly
             Event::Resize => {
                 sc.resize(
                     UNIT_SPACING,
@@ -283,9 +295,10 @@ impl WeeApp {
 
         main_win.make_resizable(true);
 
+        // Create thread to receive notifications from switches that have changed state
+        // It will forward the messages to the UI message loop so it can update the button color
         let rx = controller.start_subscription_service().unwrap();
-        let sc = s.clone();
-
+        let sc = sender.clone();
         let _ignore = std::thread::Builder::new()
             .name("APP_notifiy".to_string())
             .spawn(move || {
@@ -297,20 +310,15 @@ impl WeeApp {
 
         main_win.show();
 
-        s.send(Message::StartDiscovery);
-
-        let storage = Storage::new();
-        if let Some(settings) = storage.read() {
-            s.send(Message::Resize(settings));
-        }
+        // Start looking for switches, through the UI message loop
+        sender.send(Message::StartDiscovery);
 
         Self {
             app,
-            main_win,
             pack,
             scroll,
             reloading_frame,
-            sender: s,
+            sender,
             receiver,
             controller,
             discovering: true,
@@ -322,12 +330,7 @@ impl WeeApp {
         while self.app.wait() {
             if let Some(msg) = self.receiver.recv() {
                 match msg {
-                    Message::Resize(settings) => {
-                        info!("Resizing application window: {:#?}", settings);
-                        self.main_win
-                            .resize(settings.x, settings.y, settings.w, settings.h);
-                        self.app.redraw();
-                    }
+                    // Clear button pressed, forget all switches and clear the UI
                     Message::Clear => {
                         if !self.discovering {
                             info!("Message::Clear");
@@ -337,6 +340,8 @@ impl WeeApp {
                             self.scroll.redraw();
                         }
                     }
+
+                    // Reload button pressed, query WeeCtrl for devices in Cache and on LAN
                     Message::Reload => {
                         if !self.discovering {
                             info!("Message::Reload");
@@ -348,6 +353,7 @@ impl WeeApp {
                         }
                     }
 
+                    // WeeCtrl have found a switch, create a button for it
                     Message::AddButton(device) => {
                         info!(
                             "Message::AddButton {:?} {:?}",
@@ -389,12 +395,12 @@ impl WeeApp {
 
                         self.pack.add(&but);
 
-                        info!("Message::AddButton mid <-----!");
-
                         self.scroll.scroll_to(0, 0);
                         self.app.redraw();
                     }
 
+                    // A button was clicked, flip state of the switch and update the color
+                    // of the button according to returned result if it worked.
                     Message::Clicked(device) => {
                         info!(
                             "Message::Clicked {:?} {:?}",
@@ -419,6 +425,9 @@ impl WeeApp {
                         }
                     }
 
+                    // Display "Searching..." message and setup a thread to receive
+                    // switches found, the thread will forward them to the UI message loop
+                    // as Message::AddButton(Device) and end after mx seconds when the channel is closed.
                     Message::StartDiscovery => {
                         info!("Message::StartDiscovery");
                         self.discovering = true;
@@ -448,11 +457,14 @@ impl WeeApp {
                             .unwrap();
                     }
 
+                    // Discovery phase ended, update UI accordingly.
                     Message::EndDiscovery => {
                         info!("Message::EndDiscovery");
                         self.discovering = false;
                         self.reloading_frame.set_label("");
                     }
+
+                    // A switch have changed state, update the UI accordingly.
                     Message::Notification(n) => {
                         info!("Message::Notification: {:?} {:?}", n.unique_id, n.state);
 
@@ -463,7 +475,6 @@ impl WeeApp {
                                 btn.set_color(BUTTON_OFF_COLOR);
                             }
 
-                            self.main_win.redraw();
                             self.app.redraw();
                         }
                     }
