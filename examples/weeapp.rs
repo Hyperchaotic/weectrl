@@ -134,7 +134,7 @@ impl WeeApp {
 
         let mut btn_clear = button::Button::default().with_size(50, 50);
         btn_clear.set_frame(enums::FrameType::FlatBox);
-        btn_clear.set_pos(WINDOW_WIDTH - UNIT_SPACING - 10 - UNIT_SPACING - 10, 0);
+        btn_clear.set_pos(main_win.w() - UNIT_SPACING - 10 - UNIT_SPACING - 10, 0);
         btn_clear.set_image(Some(image_clear.clone()));
 
         let ic = image_clear.clone();
@@ -172,7 +172,7 @@ impl WeeApp {
 
         let mut btn_reload = button::Button::default().with_size(50, 50);
         btn_reload.set_frame(enums::FrameType::FlatBox);
-        btn_reload.set_pos(WINDOW_WIDTH - UNIT_SPACING - 10, 0);
+        btn_reload.set_pos(main_win.w() - UNIT_SPACING - 10, 0);
         btn_reload.set_image(Some(image_reload.clone()));
 
         let ir = image_reload.clone();
