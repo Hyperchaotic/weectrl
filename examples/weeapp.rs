@@ -50,9 +50,9 @@ const SUBSCRIPTION_AUTO_RENEW: bool = true;
 
 const UNIT_SPACING: i32 = 40;
 const BUTTON_HEIGHT: i32 = UNIT_SPACING;
-const WINDOW_WIDTH: i32 = 400;
+const WINDOW_WIDTH: i32 = 350;
 const TOP_BAR_HEIGHT: i32 = UNIT_SPACING + 10;
-const LIST_HEIGHT: i32 = 220;
+const LIST_HEIGHT: i32 = 170;
 const WINDOW_HEIGHT: i32 = LIST_HEIGHT + TOP_BAR_HEIGHT + UNIT_SPACING;
 const SCROLL_WIDTH: i32 = 15;
 
@@ -98,11 +98,18 @@ impl WeeApp {
 
         // Create main Application window. Double buffered.
         let mut main_win =
-            window::DoubleWindow::default().with_label(&format!("WeeApp {} (beta)", version));
+            window::DoubleWindow::default().with_label(&format!("WeeApp {}", version));
+
+        let args: Vec<String> = std::env::args().collect();
+
+        // Option -r resets window to default size
+        let storage = Storage::new();
+        if args.len() == 2 && args[1] == "-r" {
+            storage.clear();
+        }
 
         // Set app size/position to saved values, or use defaults
         // If no position is set the OS decides.
-        let storage = Storage::new();
         if let Some(settings) = storage.read() {
             main_win.set_size(settings.w, settings.h);
             main_win.set_pos(settings.x, settings.y);
