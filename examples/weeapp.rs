@@ -47,6 +47,7 @@ const SETTINGS_FILE: &str = "Settings.json";
 
 const SUBSCRIPTION_DURATION: u32 = 180;
 const SUBSCRIPTION_AUTO_RENEW: bool = true;
+const DISCOVERY_MX: u8 = 5;
 
 const UNIT_SPACING: i32 = 40;
 const BUTTON_HEIGHT: i32 = UNIT_SPACING;
@@ -226,11 +227,10 @@ impl WeeApp {
         main_win.end();
 
         // The part that says "Searching..." when looking for new switches on the LAN
-        let mut reloading_frame = frame::Frame::default().with_size(100, UNIT_SPACING);
-        reloading_frame.set_pos(10, WINDOW_HEIGHT - UNIT_SPACING);
-        reloading_frame.set_color(Color::Black);
+        let mut reloading_frame = frame::Frame::default().with_size(main_win.w(), UNIT_SPACING);
+        // reloading_frame.set_align(enums::Align::BottomLeft);
+        reloading_frame.set_pos(0, main_win.h() - UNIT_SPACING + 3);
         reloading_frame.set_label_color(Color::Yellow);
-
         main_win.add(&reloading_frame);
 
         let mut sc = scroll.clone();
@@ -286,8 +286,8 @@ impl WeeApp {
                 clear.set_size(50, 50);
                 clear.set_pos(w.w() - UNIT_SPACING - 10 - UNIT_SPACING - 10, 0);
 
-                rlfr.set_size(100, UNIT_SPACING);
-                rlfr.set_pos(10, w.h() - UNIT_SPACING);
+                rlfr.set_size(w.w(), UNIT_SPACING);
+                rlfr.set_pos(0, w.h() - UNIT_SPACING + 3);
 
                 //Sometimes the buttons would mysteriously be the wrong height
                 //Trying this hack to mitigate
@@ -331,6 +331,26 @@ impl WeeApp {
             discovering: true,
             buttons: HashMap::new(),
         }
+    }
+
+    fn animate_search(mut frm: frame::Frame, degrees: &mut u32, handle: app::TimeoutHandle) {
+        let label = frm.label();
+
+        if label.len() == 0 {
+            app::remove_timeout3(handle);
+            return;
+        }
+
+        *degrees -= 1;
+        if *degrees == 0 {
+            *degrees = 360;
+        }
+
+        let ticker = format!("Searching @{:04}-refresh", *degrees);
+        frm.set_label(&ticker);
+        frm.redraw();
+
+        app::repeat_timeout3(0.05, handle);
     }
 
     pub fn run(mut self) {
@@ -438,13 +458,23 @@ impl WeeApp {
                     Message::StartDiscovery => {
                         info!("Message::StartDiscovery");
                         self.discovering = true;
-                        self.reloading_frame.set_label("Searching...");
+
+                        let ticker = String::from("Searching @refresh");
+                        self.reloading_frame.set_label(&ticker);
+
+                        let frm = self.reloading_frame.clone();
+                        let mut degrees = 360;
+                        app::add_timeout3(0.05, move |handle| {
+                            let frm = frm.clone();
+                            Self::animate_search(frm, &mut degrees, handle);
+                        });
+
                         let s = self.sender.clone();
 
                         let rx = self.controller.discover_async(
                             DiscoveryMode::CacheAndBroadcast,
                             false,
-                            5,
+                            DISCOVERY_MX,
                         );
                         let _ignore = std::thread::Builder::new()
                             .name("APP_discovery".to_string())
