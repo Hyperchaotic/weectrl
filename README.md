@@ -6,7 +6,9 @@ A cross platform library and application for controlling Belkin WeMo switches an
 
 ### Screenshots
 
-![Linux](http://i.imgur.com/4QutZDQ.png "Linux")   ![Windows](http://i.imgur.com/PoNrogW.png "Windows")   ![macOS](http://i.imgur.com/s4XsDnA.png "macOS")
+![Screenshot-macOS](https://user-images.githubusercontent.com/19599562/192398374-20ca16d8-fdc7-4944-9dee-831865ec85d4.png)
+![Screenshot-Windows](https://user-images.githubusercontent.com/19599562/192398375-384d9c8e-5814-44ba-8097-f06646d12516.png)
+![Screenshot-Linux](https://user-images.githubusercontent.com/19599562/192398376-d5c41090-75d9-4ef9-b012-50921685652a.png)
 
 ### Functionality
 The "WeeApp" application will scan the local network for Belkin WeMo devices and list what's found. They can be switched on/off from the app and if a device changes state due to external activity (e.g. physical toggle or schedule) this will be reflected in the app UI due to the notification feature.
