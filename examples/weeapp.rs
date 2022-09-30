@@ -275,7 +275,7 @@ impl WeeApp {
         choice.add_choice("100%");
         choice.add_choice("90%");
         choice.add_choice("80%");
-        choice.set_pos(main_win.w() - 50, main_win.h());
+        choice.set_pos(main_win.w() - 60, main_win.h() - UNIT_SPACING + 14);
         choice.set_text_size(14);
         choice.set_tooltip("Display scaling");
         choice.hide();
@@ -354,7 +354,7 @@ impl WeeApp {
                 rlfr.set_pos(UNIT_SPACING, w.h() - UNIT_SPACING);
 
                 ch.set_size(50, 15);
-                ch.set_pos(w.w() - 60, w.h() - UNIT_SPACING + 13);
+                ch.set_pos(w.w() - 60, w.h() - UNIT_SPACING + 14);
 
                 prfr.set_size(16, 16);
                 prfr.set_pos(90 + UNIT_SPACING + 5, w.h() - 27);
@@ -407,7 +407,7 @@ impl WeeApp {
 
     // Function to animate the spinner while searching for switches via SSDP
     fn animate_search(
-        mut frm: frame::Frame,
+        frm: frame::Frame,
         mut progress: frame::Frame,
         degrees: &mut u32,
         handle: app::TimeoutHandle,
