@@ -63,7 +63,7 @@ const SCROLL_WIDTH: i32 = 15;
 const BUTTON_ON_COLOR: Color = Color::from_rgb(114, 159, 207);
 const BUTTON_OFF_COLOR: Color = Color::from_rgb(13, 25, 38);
 
-const WINDOW_ICON: &[u8] = include_bytes!("images/icon.png");
+const WINDOW_ICON: &[u8] = include_bytes!("images/titlebar.png");
 
 const RL_BTN1: &str = include_str!("images/refresh.svg");
 const RL_BTN2: &str = include_str!("images/refresh-press.svg");
