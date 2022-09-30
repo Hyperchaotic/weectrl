@@ -38,6 +38,7 @@ struct WeeApp {
     scroll: group::Scroll,
     pack: group::Pack,
     reloading_frame: frame::Frame,
+    progress_frame: frame::Frame,
     sender: app::Sender<Message>,
     receiver: app::Receiver<Message>,
     controller: WeeController,
@@ -64,6 +65,8 @@ const BUTTON_ON_COLOR: Color = Color::from_rgb(114, 159, 207);
 const BUTTON_OFF_COLOR: Color = Color::from_rgb(13, 25, 38);
 
 const WINDOW_ICON: &[u8] = include_bytes!("images/titlebar.png");
+
+const PROGRESS: &str = include_str!("images/progress.svg");
 
 const RL_BTN1: &str = include_str!("images/refresh.svg");
 const RL_BTN2: &str = include_str!("images/refresh-press.svg");
@@ -250,21 +253,29 @@ impl WeeApp {
 
         main_win.end();
 
-        // The part that says "Searching..." when looking for new switches on the LAN
-        let mut reloading_frame =
-            frame::Frame::default().with_size(main_win.w() - 100, UNIT_SPACING);
-        //        let mut reloading_frame = frame::Frame::default().with_size(main_win.w(), UNIT_SPACING);
-        // reloading_frame.set_align(enums::Align::BottomLeft);
-        //        reloading_frame.set_pos(0, main_win.h() - UNIT_SPACING + 3);
-        reloading_frame.set_pos(50, main_win.h() - UNIT_SPACING + 3);
+        // The part that says "Searching" when looking for new switches on the LAN
+        let mut reloading_frame = frame::Frame::new(
+            UNIT_SPACING,
+            main_win.h() - UNIT_SPACING,
+            90,
+            UNIT_SPACING,
+            "Searching",
+        );
+
         reloading_frame.set_label_color(Color::Yellow);
         main_win.add(&reloading_frame);
+
+        // The rotating imagee when searching on the LAN
+        let mut progress_frame = frame::Frame::default().with_size(16, 16);
+        progress_frame.set_pos(90 + UNIT_SPACING + 5, main_win.h() - 27);
+
+        main_win.add(&progress_frame);
 
         let mut choice = menu::Choice::default().with_size(50, 15);
         choice.add_choice("100%");
         choice.add_choice("90%");
         choice.add_choice("80%");
-        choice.set_pos(main_win.w() - 60, main_win.h() - UNIT_SPACING + 13);
+        choice.set_pos(main_win.w() - 50, main_win.h());
         choice.set_text_size(14);
         choice.set_tooltip("Display scaling");
         choice.hide();
@@ -284,6 +295,7 @@ impl WeeApp {
         let mut clear = btn_clear.clone();
         let mut rlfr = reloading_frame.clone();
         let mut ch = choice.clone();
+        let mut prfr = progress_frame.clone();
 
         let mut controller = WeeController::new();
 
@@ -338,11 +350,14 @@ impl WeeApp {
                 clear.set_size(50, 50);
                 clear.set_pos(w.w() - UNIT_SPACING - 10 - UNIT_SPACING - 10, 0);
 
-                rlfr.set_size(w.w(), UNIT_SPACING);
-                rlfr.set_pos(0, w.h() - UNIT_SPACING + 3);
+                rlfr.set_size(90, UNIT_SPACING);
+                rlfr.set_pos(UNIT_SPACING, w.h() - UNIT_SPACING);
 
                 ch.set_size(50, 15);
                 ch.set_pos(w.w() - 60, w.h() - UNIT_SPACING + 13);
+
+                prfr.set_size(16, 16);
+                prfr.set_pos(90 + UNIT_SPACING + 5, w.h() - 27);
 
                 //Sometimes the buttons would mysteriously be the wrong height
                 //Trying this hack to mitigate
@@ -380,6 +395,7 @@ impl WeeApp {
             pack,
             scroll,
             reloading_frame,
+            progress_frame,
             sender,
             receiver,
             controller,
@@ -390,25 +406,42 @@ impl WeeApp {
     }
 
     // Function to animate the spinner while searching for switches via SSDP
-    fn animate_search(mut frm: frame::Frame, degrees: &mut u32, handle: app::TimeoutHandle) {
-        let label = frm.label();
-
+    fn animate_search(
+        mut frm: frame::Frame,
+        mut progress: frame::Frame,
+        degrees: &mut u32,
+        handle: app::TimeoutHandle,
+    ) {
         //If the label has been cleared the search is over.
-        if label.len() == 0 {
+        if frm.label().len() == 0 {
             app::remove_timeout3(handle);
+            progress.hide();
             return;
         }
 
-        *degrees -= 1;
-        if *degrees == 0 {
-            *degrees = 360;
+        *degrees += 4;
+        if *degrees > 360 {
+            *degrees = 0;
         }
 
-        let ticker = format!("Searching @{:04}-refresh", *degrees);
+        //Tailored to that particular .svg, others won't work
+        let do_rotate = format!(
+            "<path\n transform=\"rotate({}, {}, {})\"\n",
+            degrees, 25, 25
+        );
+
+        let rotated_svg = PROGRESS.to_string().replace("<path\n", &do_rotate);
+        let mut pgs = SvgImage::from_data(&rotated_svg).unwrap();
+        pgs.scale(21, 21, true, true);
+        progress.set_image(Some(pgs));
+        progress.show();
+        progress.redraw();
+
+        let ticker = format!("Searching");
         frm.set_label(&ticker);
         frm.redraw();
 
-        app::repeat_timeout3(0.05, handle);
+        app::repeat_timeout3(0.033, handle);
     }
 
     fn show_popup(device: &DeviceInfo, icons: Option<Vec<weectrl::Icon>>) {
@@ -654,14 +687,16 @@ impl WeeApp {
                         info!("Message::StartDiscovery");
                         self.discovering = true;
 
-                        let ticker = String::from("Searching @refresh");
-                        self.reloading_frame.set_label(&ticker);
+                        self.reloading_frame.set_label("Searching");
 
                         let frm = self.reloading_frame.clone();
-                        let mut degrees = 360;
+                        let pgs = self.progress_frame.clone();
+
+                        let mut degrees = 0;
                         app::add_timeout3(0.05, move |handle| {
                             let frm = frm.clone();
-                            Self::animate_search(frm, &mut degrees, handle);
+                            let pgs = pgs.clone();
+                            Self::animate_search(frm, pgs, &mut degrees, handle);
                         });
 
                         let s = self.sender.clone();
