@@ -16,6 +16,7 @@ use crate::error::{Error, FATAL_LOCK};
 use crate::xml;
 use url::Url;
 use xml::Root;
+pub use mime::Mime;
 
 #[derive(Debug, Clone)]
 /// Notification from a device on network that binary state have changed.
@@ -92,7 +93,7 @@ impl std::fmt::Display for State {
 
 #[derive(Debug, Clone)]
 pub struct Icon {
-    pub mimetype: String,
+    pub mimetype: Mime,
     pub width: u64,
     pub height: u64,
     pub depth: u64,
@@ -118,6 +119,8 @@ pub struct DeviceInfo {
     pub state: State,
     /// Device information, from XML homepage
     pub root: Root,
+    /// Device information, data from XML homepage
+    pub xml: String,
 }
 
 /// Controller entity used for finding and control Belkin WeMo, and compatible, devices.
@@ -198,9 +201,9 @@ impl WeeController {
 
     // Given location URL, query a device. If successful add to list of active devices
     fn retrieve_device(location: &str) -> Result<Device, Error> {
-        let body = Self::get_device_home(location)?;
+        let xml = Self::get_device_home(location)?;
         let local_ip = Self::get_local_ip(location)?;
-        let root: Root = xml::parse_services(&body)?;
+        let root: Root = xml::parse_services(&xml)?;
 
         info!("Device {:?} {:?} ", root.device.friendly_name, location);
 
@@ -222,6 +225,7 @@ impl WeeController {
             location: location.to_string(),
             state: State::Unknown,
             root,
+            xml,
         };
         let mut dev = Device::new(info, local_ip);
 

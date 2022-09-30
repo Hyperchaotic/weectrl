@@ -3,11 +3,12 @@
 
 extern crate weectrl;
 
+use fltk::app::MouseButton;
 use tracing::info;
 
 use weectrl::{DeviceInfo, DiscoveryMode, State, StateNotification, WeeController};
 
-use fltk::{enums::Color, enums::Event, image::PngImage, prelude::*, *};
+use fltk::{enums::Color, enums::Event, image::PngImage, image::SvgImage, prelude::*, *};
 use fltk_theme::widget_schemes::fluent::colors::*;
 use fltk_theme::{SchemeType, WidgetScheme};
 use std::collections::HashMap;
@@ -29,6 +30,7 @@ enum Message {
     AddButton(DeviceInfo),
     Notification(StateNotification),
     Clicked(DeviceInfo),
+    ScaleApp,
 }
 
 struct WeeApp {
@@ -41,6 +43,7 @@ struct WeeApp {
     controller: WeeController,
     discovering: bool,                        // Is discover currently in progress?
     buttons: HashMap<String, button::Button>, // List of deviceID's and indexes of the associated buttons
+    scaling: menu::Choice,
 }
 
 const SETTINGS_FILE: &str = "Settings.json";
@@ -62,17 +65,39 @@ const BUTTON_OFF_COLOR: Color = Color::from_rgb(13, 25, 38);
 
 const WINDOW_ICON: &[u8] = include_bytes!("images/icon.png");
 
-const RL_BTN1: &[u8] = include_bytes!("images/refresh_b.png");
-const RL_BTN2: &[u8] = include_bytes!("images/refresh_press_b.png");
-const RL_BTN3: &[u8] = include_bytes!("images/refresh_hover_b.png");
+const RL_BTN1: &str = include_str!("images/refresh.svg");
+const RL_BTN2: &str = include_str!("images/refresh-press.svg");
+const RL_BTN3: &str = include_str!("images/refresh-hover.svg");
 
-const CL_BTN1: &[u8] = include_bytes!("images/clear.png");
-const CL_BTN2: &[u8] = include_bytes!("images/clear_press.png");
-const CL_BTN3: &[u8] = include_bytes!("images/clear_hover.png");
+const CL_BTN1: &str = include_str!("images/clear.svg");
+const CL_BTN2: &str = include_str!("images/clear-press.svg");
+const CL_BTN3: &str = include_str!("images/clear-hover.svg");
 
 const CLEAR_TOOLTIP: &str = "Forget all devices and clear the on-disk list of known devices.";
 const RELOAD_TOOLTIP: &str =
     "Reload list of devices from on-disk list (if any) and then by network query.";
+const SWITCH_TOOLTIP: &str = "Left click to toggle switch. Right click for additional information.";
+
+macro_rules! read_image {
+    ($data:ident) => {{
+        let mut img = SvgImage::from_data($data).unwrap();
+        img.scale(30, 30, true, true);
+        img
+    }};
+}
+
+// Builder for the information dialogue.
+macro_rules! place_field {
+    ($name:expr, $string:expr) => {
+        let st = format!("{}:  {:?}", $name, $string);
+        let mut name = output::Output::default().with_size(0, 20);
+        name.set_value(&st);
+        name.set_color(Color::from_hex(0x2e3436));
+        name.set_label_font(enums::Font::CourierBold);
+        name.set_frame(enums::FrameType::FlatBox);
+        name.set_text_size(14);
+    };
+}
 
 impl WeeApp {
     pub fn new() -> Self {
@@ -111,11 +136,20 @@ impl WeeApp {
 
         // Set app size/position to saved values, or use defaults
         // If no position is set the OS decides.
-        if let Some(settings) = storage.read() {
+        let settings = storage.read();
+        let scale: f32;
+        if let Some(settings) = settings {
             main_win.set_size(settings.w, settings.h);
             main_win.set_pos(settings.x, settings.y);
+
+            scale = settings.scaling;
+            let screens = app::Screen::all_screens();
+            for s in screens {
+                s.set_scale(scale);
+            }
         } else {
             main_win.set_size(WINDOW_WIDTH, WINDOW_HEIGHT);
+            scale = 1.0;
         }
 
         main_win.set_color(Color::Gray0);
@@ -124,14 +158,9 @@ impl WeeApp {
         main_win.set_icon(Some(window_icon));
 
         // Load all the images for clear/reload buttons
-        let mut image_clear = PngImage::from_data(CL_BTN1).unwrap();
-        image_clear.scale(50, 50, true, true);
-
-        let mut image_clear_click = PngImage::from_data(CL_BTN2).unwrap();
-        image_clear_click.scale(50, 50, true, true);
-
-        let mut image_clear_hover = PngImage::from_data(CL_BTN3).unwrap();
-        image_clear_hover.scale(50, 50, true, true);
+        let image_clear = read_image!(CL_BTN1);
+        let image_clear_click = read_image!(CL_BTN2);
+        let image_clear_hover = read_image!(CL_BTN3);
 
         let mut btn_clear = button::Button::default().with_size(50, 50);
         btn_clear.set_frame(enums::FrameType::FlatBox);
@@ -162,14 +191,9 @@ impl WeeApp {
             _ => false,
         });
 
-        let mut image_reload = PngImage::from_data(RL_BTN1).unwrap();
-        image_reload.scale(50, 50, true, true);
-
-        let mut image_reload_click = PngImage::from_data(RL_BTN2).unwrap();
-        image_reload_click.scale(50, 50, true, true);
-
-        let mut image_reload_hover = PngImage::from_data(RL_BTN3).unwrap();
-        image_reload_hover.scale(50, 50, true, true);
+        let image_reload = read_image!(RL_BTN1);
+        let image_reload_click = read_image!(RL_BTN2);
+        let image_reload_hover = read_image!(RL_BTN3);
 
         let mut btn_reload = button::Button::default().with_size(50, 50);
         btn_reload.set_frame(enums::FrameType::FlatBox);
@@ -227,17 +251,39 @@ impl WeeApp {
         main_win.end();
 
         // The part that says "Searching..." when looking for new switches on the LAN
-        let mut reloading_frame = frame::Frame::default().with_size(main_win.w(), UNIT_SPACING);
+        let mut reloading_frame =
+            frame::Frame::default().with_size(main_win.w() - 100, UNIT_SPACING);
+        //        let mut reloading_frame = frame::Frame::default().with_size(main_win.w(), UNIT_SPACING);
         // reloading_frame.set_align(enums::Align::BottomLeft);
-        reloading_frame.set_pos(0, main_win.h() - UNIT_SPACING + 3);
+        //        reloading_frame.set_pos(0, main_win.h() - UNIT_SPACING + 3);
+        reloading_frame.set_pos(50, main_win.h() - UNIT_SPACING + 3);
         reloading_frame.set_label_color(Color::Yellow);
         main_win.add(&reloading_frame);
+
+        let mut choice = menu::Choice::default().with_size(50, 15);
+        choice.add_choice("100%");
+        choice.add_choice("90%");
+        choice.add_choice("80%");
+        choice.set_pos(main_win.w() - 60, main_win.h() - UNIT_SPACING + 13);
+        choice.set_text_size(14);
+        choice.set_tooltip("Display scaling");
+        choice.hide();
+
+        if scale == 1.0 {
+            choice.set_value(0);
+        } else {
+            choice.set_value(1);
+        }
+        main_win.add(&choice);
+
+        choice.emit(sender.clone(), Message::ScaleApp);
 
         let mut sc = scroll.clone();
         let mut pa = pack.clone();
         let mut reload = btn_reload.clone();
         let mut clear = btn_clear.clone();
         let mut rlfr = reloading_frame.clone();
+        let mut ch = choice.clone();
 
         let mut controller = WeeController::new();
 
@@ -249,6 +295,12 @@ impl WeeApp {
                     y: w.y(),
                     w: w.w(),
                     h: w.h(),
+                    scaling: match ch.value() {
+                        0 => 1.0,
+                        1 => 0.9,
+                        2 => 0.8,
+                        _ => 1.0,
+                    },
                 };
 
                 info!("Quitting. Saving Window position/size: {:#?}", settings);
@@ -288,6 +340,9 @@ impl WeeApp {
 
                 rlfr.set_size(w.w(), UNIT_SPACING);
                 rlfr.set_pos(0, w.h() - UNIT_SPACING + 3);
+
+                ch.set_size(50, 15);
+                ch.set_pos(w.w() - 60, w.h() - UNIT_SPACING + 13);
 
                 //Sometimes the buttons would mysteriously be the wrong height
                 //Trying this hack to mitigate
@@ -330,12 +385,15 @@ impl WeeApp {
             controller,
             discovering: true,
             buttons: HashMap::new(),
+            scaling: choice,
         }
     }
 
+    // Function to animate the spinner while searching for switches via SSDP
     fn animate_search(mut frm: frame::Frame, degrees: &mut u32, handle: app::TimeoutHandle) {
         let label = frm.label();
 
+        //If the label has been cleared the search is over.
         if label.len() == 0 {
             app::remove_timeout3(handle);
             return;
@@ -353,10 +411,131 @@ impl WeeApp {
         app::repeat_timeout3(0.05, handle);
     }
 
+    fn show_popup(device: &DeviceInfo, icons: Option<Vec<weectrl::Icon>>) {
+        const WIND_WIDTH: i32 = 500;
+        const WIND_HEIGHT: i32 = 500;
+        const PADDING: i32 = 15;
+        const TAB_WIDTH: i32 = WIND_WIDTH - 2 * PADDING;
+        const TAB_HEIGHT: i32 = WIND_WIDTH - 2 * PADDING;
+        const GROUP_HEIGHT: i32 = TAB_HEIGHT - 25;
+
+        let mut window = window::Window::default().with_label(&device.friendly_name);
+        window.set_size(WIND_WIDTH, WIND_HEIGHT);
+
+        let tab = group::Tabs::new(PADDING, PADDING, TAB_WIDTH, TAB_HEIGHT, "");
+
+        let grp1 = group::Group::new(PADDING, PADDING + 25, TAB_WIDTH, GROUP_HEIGHT, "Info\t\t");
+
+        let mut pack = group::Pack::default()
+            .with_pos(25, 80)
+            .with_size(grp1.w() - 25, grp1.h() - 150);
+
+        pack.set_type(group::PackType::Vertical);
+        pack.set_spacing(2);
+        pack.set_color(Color::BackGround | Color::Red);
+        pack.set_spacing(5);
+
+        if let Some(icons) = icons {
+            let mut frame = frame::Frame::default().with_size(200, 200).center_of(&pack);
+            frame.set_frame(enums::FrameType::FlatBox);
+            frame.set_color(Color::from_hex(0x2e3436));
+
+            let icon = icons.get(0).unwrap();
+
+            if icon.mimetype == mime::IMAGE_PNG {
+                if let Ok(img) = PngImage::from_data(icon.data.as_slice()) {
+                    info!("IMAGE H {}", img.h());
+                    info!("IMAGE W {}", img.w());
+                    frame.set_image(Some(img));
+                }
+            } else if icon.mimetype == mime::IMAGE_JPEG {
+                if let Ok(img) = image::JpegImage::from_data(icon.data.as_slice()) {
+                    frame.set_image(Some(img));
+                }
+            } else if icon.mimetype == mime::IMAGE_GIF {
+                if let Ok(img) = image::GifImage::from_data(icon.data.as_slice()) {
+                    frame.set_image(Some(img));
+                }
+            }
+        }
+
+        let spacer = frame::Frame::new(0, 0, 0, 50, "  ");
+        pack.add(&spacer);
+
+        place_field!("          Name", &device.friendly_name);
+        place_field!("          Model", &device.model);
+        place_field!("          Hostname", &device.hostname);
+        place_field!("          Location", &device.location);
+
+        let mut mac = device.root.device.mac_address.clone();
+        mac.insert(10, ':');
+        mac.insert(8, ':');
+        mac.insert(6, ':');
+        mac.insert(4, ':');
+        mac.insert(2, ':');
+
+        place_field!("          MAC Address", &mac);
+
+        pack.end();
+        grp1.end();
+
+        // TAB 2
+        let grp2 = group::Group::new(PADDING, PADDING + 25, TAB_WIDTH, GROUP_HEIGHT, "Homepage\t");
+
+        let mut scroll = group::Scroll::new(20, 50, grp2.w() - 20, grp2.h() - 40, "");
+
+        scroll.set_frame(enums::FrameType::BorderBox);
+        scroll.set_type(group::ScrollType::BothAlways);
+        scroll.make_resizable(false);
+        scroll.set_color(Color::BackGround | Color::from_hex(0x2e3436));
+        scroll.set_scrollbar_size(SCROLL_WIDTH);
+
+        let mut name = output::MultilineOutput::new(10, 35, grp2.w() + 100, grp2.h() * 5, "");
+        name.set_value(&device.xml);
+        name.set_color(Color::from_hex(0x2e3436));
+        name.set_label_font(enums::Font::CourierBold);
+        name.set_frame(enums::FrameType::FlatBox);
+        name.set_text_size(14);
+
+        scroll.scroll_to(0, 0);
+
+        scroll.end();
+        scroll.redraw();
+        grp2.end();
+        tab.end();
+
+        window.end();
+
+        window.show();
+    }
+
     pub fn run(mut self) {
         while self.app.wait() {
             if let Some(msg) = self.receiver.recv() {
                 match msg {
+                    Message::ScaleApp => {
+                        let screens = app::Screen::all_screens();
+
+                        match self.scaling.value() {
+                            0 => {
+                                for s in screens {
+                                    s.set_scale(1.0);
+                                }
+                            }
+                            1 => {
+                                for s in screens {
+                                    s.set_scale(0.9);
+                                }
+                            }
+                            2 => {
+                                for s in screens {
+                                    s.set_scale(0.8);
+                                }
+                            }
+                            _ => unreachable!(),
+                        }
+                        app::redraw();
+                    }
                     // Clear button pressed, forget all switches and clear the UI
                     Message::Clear => {
                         if !self.discovering {
@@ -372,6 +551,7 @@ impl WeeApp {
                     Message::Reload => {
                         if !self.discovering {
                             info!("Message::Reload");
+                            self.scaling.hide();
                             self.controller.clear(false);
                             self.buttons.clear();
                             self.pack.clear();
@@ -393,9 +573,10 @@ impl WeeApp {
                         );
 
                         let mut but = button::Button::default()
-                            .with_label(&format!("{:?}", device.friendly_name));
+                            .with_label(&format!("{}", device.friendly_name));
 
                         but.set_size(self.pack.w(), BUTTON_HEIGHT);
+                        but.set_tooltip(SWITCH_TOOLTIP);
 
                         if device.state == State::On {
                             but.set_color(BUTTON_ON_COLOR);
@@ -430,23 +611,37 @@ impl WeeApp {
                     // of the button according to returned result if it worked.
                     Message::Clicked(device) => {
                         info!(
-                            "Message::Clicked {:?} {:?}",
-                            device.unique_id, device.friendly_name
+                            "Message::Clicked MB({:?}) {:?} {:?}",
+                            app::event_mouse_button(),
+                            device.unique_id,
+                            device.friendly_name
                         );
-                        if let Some(btn) = self.buttons.get_mut(&device.unique_id) {
-                            let state = if btn.color() == BUTTON_ON_COLOR {
-                                State::Off
-                            } else {
-                                State::On
-                            };
 
-                            if let Ok(ret_state) =
-                                self.controller.set_binary_state(&device.unique_id, state)
-                            {
-                                if ret_state == State::On {
-                                    btn.set_color(BUTTON_ON_COLOR);
+                        if let Some(btn) = self.buttons.get_mut(&device.unique_id) {
+                            if app::event_mouse_button() == MouseButton::Right {
+                                let mut icons: Option<Vec<weectrl::Icon>> = None;
+                                if let Ok(res) = self.controller.get_icons(&device.unique_id) {
+                                    if res.len() > 0 {
+                                        icons = Some(res);
+                                    }
+                                }
+
+                                Self::show_popup(&device, icons);
+                            } else {
+                                let state = if btn.color() == BUTTON_ON_COLOR {
+                                    State::Off
                                 } else {
-                                    btn.set_color(BUTTON_OFF_COLOR);
+                                    State::On
+                                };
+
+                                if let Ok(ret_state) =
+                                    self.controller.set_binary_state(&device.unique_id, state)
+                                {
+                                    if ret_state == State::On {
+                                        btn.set_color(BUTTON_ON_COLOR);
+                                    } else {
+                                        btn.set_color(BUTTON_OFF_COLOR);
+                                    }
                                 }
                             }
                         }
@@ -498,6 +693,7 @@ impl WeeApp {
                     Message::EndDiscovery => {
                         info!("Message::EndDiscovery");
                         self.discovering = false;
+                        self.scaling.show();
                         self.reloading_frame.set_label("");
                     }
 
@@ -532,12 +728,13 @@ fn main() {
     a.run();
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Settings {
     x: i32,
     y: i32,
     w: i32,
     h: i32,
+    scaling: f32,
 }
 
 pub struct Storage {

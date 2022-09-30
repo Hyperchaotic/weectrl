@@ -181,14 +181,33 @@ impl Device {
 
             let req_file = Some(xmlicon.url.clone());
             let req_url = Self::make_request_url(&self.info.base_url, &req_file)?;
+
             let data = rpc::http_get(&req_url)?;
+
+            // Image type is unreliable, so we have to peek in the data stream to detect it.
+            let mimetype: mime::Mime = match data.as_slice() {
+                // JPEG
+                [0xFF, 0xD8, 0xFF, ..] => mime::IMAGE_JPEG,
+                // GIF
+                [0x47, 0x49, 0x46, 0x38, ..] => mime::IMAGE_GIF,
+                // PNG
+                [0x89, 0x50, 0x4E, 0x47, ..] => mime::IMAGE_PNG,
+                _ => return Err(Error::InvalidResponse(reqwest::StatusCode::IM_A_TEAPOT)),
+            };
+
+            info!(
+                "Fetch Icon {}. MimeType returned: {:#?}",
+                &req_url, &mimetype
+            );
+
             let icon = Icon {
-                mimetype: xmlicon.mimetype.clone(),
+                mimetype,
                 width,
                 height,
                 depth,
                 data,
             };
+
             icon_list.push(icon);
         }
 
