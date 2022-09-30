@@ -425,21 +425,15 @@ impl WeeApp {
         }
 
         //Tailored to that particular .svg, others won't work
-        let do_rotate = format!(
-            "<path\n transform=\"rotate({}, {}, {})\"\n",
-            degrees, 25, 25
-        );
+        let do_rotate = format!("<path transform=\"rotate({}, {}, {})\" ", degrees, 25, 25);
 
-        let rotated_svg = PROGRESS.to_string().replace("<path\n", &do_rotate);
+        let rotated_svg = PROGRESS.to_string().replace("<path", &do_rotate);
         let mut pgs = SvgImage::from_data(&rotated_svg).unwrap();
         pgs.scale(21, 21, true, true);
         progress.set_image(Some(pgs));
+        progress.hide();
         progress.show();
         progress.redraw();
-
-        let ticker = format!("Searching");
-        frm.set_label(&ticker);
-        frm.redraw();
 
         app::repeat_timeout3(0.033, handle);
     }
