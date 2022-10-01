@@ -406,6 +406,7 @@ impl WeeApp {
     }
 
     // Function to animate the spinner while searching for switches via SSDP
+    // runs about 30fps.
     fn animate_search(
         frm: frame::Frame,
         mut progress: frame::Frame,
@@ -424,10 +425,13 @@ impl WeeApp {
             *degrees = 0;
         }
 
-        //Tailored to that particular .svg, others won't work
+        //Tailored to that particular .svg, others won't work if they're different size
+        // or have other draw elements than path
+        // the string replace takes roughtly 30us on an Intel i7-9750, it would take 2us
+        // with core::ptr::copy() but not worth it for adding unsafe code.
         let do_rotate = format!("<path transform=\"rotate({}, {}, {})\" ", degrees, 25, 25);
+        let rotated_svg = PROGRESS.replace("<path", &do_rotate);
 
-        let rotated_svg = PROGRESS.to_string().replace("<path", &do_rotate);
         let mut pgs = SvgImage::from_data(&rotated_svg).unwrap();
         pgs.scale(21, 21, true, true);
         progress.set_image(Some(pgs));
