@@ -324,6 +324,8 @@ impl WeeApp {
 
             Event::Show => {
                 info!("Event::Show");
+                info!("choice: {}", ch.value());
+
                 //Sometimes the buttons would mysteriously be double height
                 //Trying this hack to mitigate
                 for i in 0..pa.children() {
@@ -335,6 +337,8 @@ impl WeeApp {
 
             // When resizing the App window, reposition internal elements accordingly
             Event::Resize => {
+                info!("Event::Resize");
+                info!("choice: {}", ch.value());
                 sc.resize(
                     UNIT_SPACING,
                     TOP_BAR_HEIGHT,
@@ -410,6 +414,7 @@ impl WeeApp {
     fn animate_search(
         frm: frame::Frame,
         mut progress: frame::Frame,
+        animation: &mut AnimatedSvg,
         degrees: &mut u32,
         handle: app::TimeoutHandle,
     ) {
@@ -425,16 +430,13 @@ impl WeeApp {
             *degrees = 0;
         }
 
-        //Tailored to that particular .svg, others won't work if they're different size
-        // or have other draw elements than path
-        // the string replace takes roughtly 30us on an Intel i7-9750, it would take 2us
-        // with core::ptr::copy() but not worth it for adding unsafe code.
-        let do_rotate = format!("<path transform=\"rotate({}, {}, {})\" ", degrees, 25, 25);
-        let rotated_svg = PROGRESS.replace("<path", &do_rotate);
+        (*animation).rotate(*degrees);
 
-        let mut pgs = SvgImage::from_data(&rotated_svg).unwrap();
-        pgs.scale(21, 21, true, true);
-        progress.set_image(Some(pgs));
+        let mut img = animation.to_svg_image();
+
+        img.scale(21, 21, true, true);
+
+        progress.set_image(Some(img));
         progress.hide();
         progress.show();
         progress.redraw();
@@ -545,21 +547,25 @@ impl WeeApp {
             if let Some(msg) = self.receiver.recv() {
                 match msg {
                     Message::ScaleApp => {
+                        info!("choice size {}", self.scaling.value());
                         let screens = app::Screen::all_screens();
 
                         match self.scaling.value() {
                             0 => {
                                 for s in screens {
+                                    info!("screen size {}", s.scale());
                                     s.set_scale(1.0);
                                 }
                             }
                             1 => {
                                 for s in screens {
+                                    info!("screen size {}", s.scale());
                                     s.set_scale(0.9);
                                 }
                             }
                             2 => {
                                 for s in screens {
+                                    info!("screen size {}", s.scale());
                                     s.set_scale(0.8);
                                 }
                             }
@@ -690,11 +696,12 @@ impl WeeApp {
                         let frm = self.reloading_frame.clone();
                         let pgs = self.progress_frame.clone();
 
+                        let mut animation = AnimatedSvg::new(PROGRESS);
                         let mut degrees = 0;
                         app::add_timeout3(0.05, move |handle| {
                             let frm = frm.clone();
                             let pgs = pgs.clone();
-                            Self::animate_search(frm, pgs, &mut degrees, handle);
+                            Self::animate_search(frm, pgs, &mut animation, &mut degrees, handle);
                         });
 
                         let s = self.sender.clone();
@@ -747,6 +754,40 @@ impl WeeApp {
                 }
             }
         }
+    }
+}
+
+struct AnimatedSvg {
+    // Svg file with a single rotate(000,x,y) instruction
+    svg: String,
+    // Location of the hardcoded "000" in "rotate(000" to modify
+    location: usize,
+}
+
+impl AnimatedSvg {
+    pub fn new(data: &str) -> Self {
+        AnimatedSvg {
+            svg: data.to_string(),
+            location: data.find("rotate(000").unwrap() + 7,
+        }
+    }
+
+    // Rotates the svg by modifying the svg data in place
+    // much faster than string replace but unsafe
+    // the constructor would have panicked at find(..).unwrap() if it wasn't possible
+    pub fn rotate(&mut self, degrees: u32) {
+        let do_rotate = format!("{:03}", degrees);
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                do_rotate.as_ptr(),
+                self.svg[self.location..self.location + 3].as_mut_ptr(),
+                3,
+            );
+        }
+    }
+
+    fn to_svg_image(&self) -> SvgImage {
+        SvgImage::from_data(&self.svg).unwrap()
     }
 }
 
