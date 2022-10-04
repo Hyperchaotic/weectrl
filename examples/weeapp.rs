@@ -47,6 +47,48 @@ struct WeeApp {
     scaling: menu::Choice,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct DisplayScale {
+    value: f32,
+}
+
+// Struct to encapsulate the screen scaling and convert between
+// the three sizes 1.0, 0.9 and 0.8 and the corresponding indexes
+// in the Choice dialog 0, 1, 2
+impl DisplayScale {
+    fn default() -> Self {
+        DisplayScale { value: 1.0 }
+    }
+}
+
+impl From<DisplayScale> for f32 {
+    fn from(item: DisplayScale) -> Self {
+        item.value
+    }
+}
+
+impl From<DisplayScale> for i32 {
+    fn from(item: DisplayScale) -> Self {
+        if item.value == 0.9 {
+            1
+        } else if item.value == 0.8 {
+            2
+        } else {
+            0
+        }
+    }
+}
+
+impl From<i32> for DisplayScale {
+    fn from(item: i32) -> Self {
+        match item {
+            1 => DisplayScale { value: 0.9 },
+            2 => DisplayScale { value: 0.8 },
+            _ => DisplayScale { value: 1.0 },
+        }
+    }
+}
+
 const SETTINGS_FILE: &str = "Settings.json";
 
 const SUBSCRIPTION_DURATION: u32 = 180;
@@ -140,19 +182,19 @@ impl WeeApp {
         // Set app size/position to saved values, or use defaults
         // If no position is set the OS decides.
         let settings = storage.read();
-        let scale: f32;
+        let scale: DisplayScale;
         if let Some(settings) = settings {
             main_win.set_size(settings.w, settings.h);
             main_win.set_pos(settings.x, settings.y);
 
             scale = settings.scaling;
             let screens = app::Screen::all_screens();
-            for s in screens {
-                s.set_scale(scale);
+            for &s in &screens {
+                s.set_scale(scale.into());
             }
         } else {
             main_win.set_size(WINDOW_WIDTH, WINDOW_HEIGHT);
-            scale = 1.0;
+            scale = DisplayScale::default();
         }
 
         main_win.set_color(Color::Gray0);
@@ -280,11 +322,8 @@ impl WeeApp {
         choice.set_tooltip("Display scaling");
         choice.hide();
 
-        if scale == 1.0 {
-            choice.set_value(0);
-        } else {
-            choice.set_value(1);
-        }
+        choice.set_value(scale.into());
+
         main_win.add(&choice);
 
         choice.emit(sender.clone(), Message::ScaleApp);
@@ -307,16 +346,8 @@ impl WeeApp {
                     y: w.y(),
                     w: w.w(),
                     h: w.h(),
-                    scaling: match ch.value() {
-                        0 => 1.0,
-                        1 => 0.9,
-                        2 => 0.8,
-                        _ => 1.0,
-                    },
+                    scaling: DisplayScale::from(ch.value()),
                 };
-
-                info!("Quitting. Saving Window position/size: {:#?}", settings);
-
                 let storage = Storage::new();
                 storage.write(settings);
                 true
@@ -325,6 +356,12 @@ impl WeeApp {
             Event::Show => {
                 info!("Event::Show");
                 info!("choice: {}", ch.value());
+
+                let screens = app::Screen::all_screens();
+
+                for &s in &screens {
+                    info!("screen size {}", s.scale());
+                }
 
                 //Sometimes the buttons would mysteriously be double height
                 //Trying this hack to mitigate
@@ -339,6 +376,13 @@ impl WeeApp {
             Event::Resize => {
                 info!("Event::Resize");
                 info!("choice: {}", ch.value());
+
+                let screens = app::Screen::all_screens();
+
+                for &s in &screens {
+                    info!("screen size {}", s.scale());
+                }
+
                 sc.resize(
                     UNIT_SPACING,
                     TOP_BAR_HEIGHT,
@@ -541,31 +585,35 @@ impl WeeApp {
             if let Some(msg) = self.receiver.recv() {
                 match msg {
                     Message::ScaleApp => {
-                        info!("choice size {}", self.scaling.value());
+                        info!("Message::ScaleApp. choice size {}", self.scaling.value());
                         let screens = app::Screen::all_screens();
+
+                        for &s in &screens {
+                            info!("screen size {}", s.scale());
+                        }
 
                         match self.scaling.value() {
                             0 => {
-                                for s in screens {
-                                    info!("screen size {}", s.scale());
+                                for &s in &screens {
                                     s.set_scale(1.0);
                                 }
                             }
                             1 => {
-                                for s in screens {
-                                    info!("screen size {}", s.scale());
+                                for &s in &screens {
                                     s.set_scale(0.9);
                                 }
                             }
                             2 => {
-                                for s in screens {
-                                    info!("screen size {}", s.scale());
+                                for &s in &screens {
                                     s.set_scale(0.8);
                                 }
                             }
                             _ => unreachable!(),
                         }
                         app::redraw();
+                        for &s in &screens {
+                            info!("screen size {}", s.scale());
+                        }
                     }
                     // Clear button pressed, forget all switches and clear the UI
                     Message::Clear => {
@@ -807,7 +855,7 @@ pub struct Settings {
     y: i32,
     w: i32,
     h: i32,
-    scaling: f32,
+    scaling: DisplayScale,
 }
 
 pub struct Storage {
@@ -838,6 +886,8 @@ impl Storage {
 
     /// Write data to cache, errors ignored
     pub fn write(&self, settings: Settings) {
+        info!("Saving settings: {:#?}", settings);
+
         if let Some(ref fpath) = self.cache_file {
             let data = settings;
             if let Some(prefix) = fpath.parent() {
@@ -858,6 +908,7 @@ impl Storage {
                 let mut s = String::new();
                 let _ignore = file.read_to_string(&mut s);
                 let data: Option<Settings> = serde_json::from_str(&s).ok();
+                info!("read settings: {:#?}", data);
                 return data;
             }
         }
