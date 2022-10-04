@@ -415,7 +415,6 @@ impl WeeApp {
         frm: frame::Frame,
         mut progress: frame::Frame,
         animation: &mut AnimatedSvg,
-        degrees: &mut u32,
         handle: app::TimeoutHandle,
     ) {
         //If the label has been cleared the search is over.
@@ -425,12 +424,7 @@ impl WeeApp {
             return;
         }
 
-        *degrees += 4;
-        if *degrees > 360 {
-            *degrees = 0;
-        }
-
-        (*animation).rotate(*degrees);
+        (*animation).rotate(4);
 
         let mut img = animation.to_svg_image();
 
@@ -697,11 +691,10 @@ impl WeeApp {
                         let pgs = self.progress_frame.clone();
 
                         let mut animation = AnimatedSvg::new(PROGRESS);
-                        let mut degrees = 0;
                         app::add_timeout3(0.05, move |handle| {
                             let frm = frm.clone();
                             let pgs = pgs.clone();
-                            Self::animate_search(frm, pgs, &mut animation, &mut degrees, handle);
+                            Self::animate_search(frm, pgs, &mut animation, handle);
                         });
 
                         let s = self.sender.clone();
@@ -760,6 +753,7 @@ impl WeeApp {
 struct AnimatedSvg {
     // Svg file with a single rotate(000,x,y) instruction
     svg: String,
+    position: u32,
     // Location of the hardcoded "000" in "rotate(000" to modify
     location: usize,
 }
@@ -768,6 +762,7 @@ impl AnimatedSvg {
     pub fn new(data: &str) -> Self {
         AnimatedSvg {
             svg: data.to_string(),
+            position: 0,
             location: data.find("rotate(000").unwrap() + 7,
         }
     }
@@ -776,7 +771,11 @@ impl AnimatedSvg {
     // much faster than string replace but unsafe
     // the constructor would have panicked at find(..).unwrap() if it wasn't possible
     pub fn rotate(&mut self, degrees: u32) {
-        let do_rotate = format!("{:03}", degrees);
+        self.position += degrees;
+        if self.position > 360 {
+            self.position = 0
+        }
+        let do_rotate = format!("{:03}", self.position);
         unsafe {
             core::ptr::copy_nonoverlapping(
                 do_rotate.as_ptr(),
