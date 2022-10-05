@@ -47,48 +47,6 @@ struct WeeApp {
     scaling: menu::Choice,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-struct DisplayScale {
-    value: f32,
-}
-
-// Struct to encapsulate the screen scaling and convert between
-// the three sizes 1.0, 0.9 and 0.8 and the corresponding indexes
-// in the Choice dialog 0, 1, 2
-impl DisplayScale {
-    fn default() -> Self {
-        DisplayScale { value: 1.0 }
-    }
-}
-
-impl From<DisplayScale> for f32 {
-    fn from(item: DisplayScale) -> Self {
-        item.value
-    }
-}
-
-impl From<DisplayScale> for i32 {
-    fn from(item: DisplayScale) -> Self {
-        if item.value == 0.9 {
-            1
-        } else if item.value == 0.8 {
-            2
-        } else {
-            0
-        }
-    }
-}
-
-impl From<i32> for DisplayScale {
-    fn from(item: i32) -> Self {
-        match item {
-            1 => DisplayScale { value: 0.9 },
-            2 => DisplayScale { value: 0.8 },
-            _ => DisplayScale { value: 1.0 },
-        }
-    }
-}
-
 const SETTINGS_FILE: &str = "Settings.json";
 
 const SUBSCRIPTION_DURATION: u32 = 180;
@@ -798,23 +756,68 @@ impl WeeApp {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct DisplayScale {
+    value: f32,
+}
+
+// Struct to encapsulate the screen scaling and convert between
+// the three sizes 1.0, 0.9 and 0.8 and the corresponding indexes
+// in the Choice dialog 0, 1, 2
+impl DisplayScale {
+    fn default() -> Self {
+        DisplayScale { value: 1.0 }
+    }
+}
+
+impl From<DisplayScale> for f32 {
+    fn from(item: DisplayScale) -> Self {
+        item.value
+    }
+}
+
+impl From<DisplayScale> for i32 {
+    fn from(item: DisplayScale) -> Self {
+        if item.value == 0.9 {
+            1
+        } else if item.value == 0.8 {
+            2
+        } else {
+            0
+        }
+    }
+}
+
+impl From<i32> for DisplayScale {
+    fn from(item: i32) -> Self {
+        match item {
+            1 => DisplayScale { value: 0.9 },
+            2 => DisplayScale { value: 0.8 },
+            _ => DisplayScale { value: 1.0 },
+        }
+    }
+}
+
 struct AnimatedSvg {
     // Svg file with a single rotate(000,x,y) instruction
     svg: String,
+    // Current degrees of rotation
     position: u32,
     // Location of the hardcoded "000" in "rotate(000" to modify
-    location: usize,
+    range: core::ops::Range<usize>,
 }
 
 impl AnimatedSvg {
     pub fn new(data: &str) -> Self {
+        let location = data.find("rotate(000").unwrap() + 7;
         AnimatedSvg {
             svg: data.to_string(),
             position: 0,
-            location: data.find("rotate(000").unwrap() + 7,
+            range: location..location + 3,
         }
     }
 
+    // Rotate by current position + degrees delta.
     // Rotates the svg by modifying the svg data in place
     // much faster than string replace but unsafe
     // the constructor would have panicked at find(..).unwrap() if it wasn't possible
@@ -824,12 +827,9 @@ impl AnimatedSvg {
             self.position = 0
         }
         let do_rotate = format!("{:03}", self.position);
+        let range = self.range.clone();
         unsafe {
-            core::ptr::copy_nonoverlapping(
-                do_rotate.as_ptr(),
-                self.svg[self.location..self.location + 3].as_mut_ptr(),
-                3,
-            );
+            core::ptr::copy_nonoverlapping(do_rotate.as_ptr(), self.svg[range].as_mut_ptr(), 3);
         }
     }
 
