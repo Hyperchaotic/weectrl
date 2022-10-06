@@ -56,6 +56,16 @@ pub enum Model {
     Unknown(String),
 }
 
+impl std::fmt::Display for Model {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Lightswitch => write!(f, "Light Switch"),
+            Self::Socket => write!(f, "Socket"),
+            Self::Unknown(str)  => write!(f, "{}", str),
+        }
+    }
+}
+
 impl<'a> From<&'a str> for Model {
     fn from(string: &'a str) -> Self {
         match string {

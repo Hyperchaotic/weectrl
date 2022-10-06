@@ -90,15 +90,16 @@ macro_rules! read_image {
 }
 
 // Builder for the information dialogue.
-macro_rules! place_field {
-    ($name:expr, $string:expr) => {
-        let st = format!("{}:  {:?}", $name, $string);
-        let mut name = output::Output::default().with_size(0, 20);
+macro_rules! build_field {
+    ($parent:ident, $name:expr, $string:expr) => {
+        let st = format!("{}:  {:}", $name, $string);
+        let mut name = Box::new(output::Output::default().with_size(0, 20));
         name.set_value(&st);
         name.set_color(Color::from_hex(0x2e3436));
-        name.set_label_font(enums::Font::CourierBold);
+        name.set_label_font(enums::Font::Helvetica);
         name.set_frame(enums::FrameType::FlatBox);
-        name.set_text_size(14);
+        name.set_text_size(16);
+        $parent.add(&*name);
     };
 }
 
@@ -157,8 +158,7 @@ impl WeeApp {
 
         main_win.set_color(Color::Gray0);
 
-        let window_icon = PngImage::from_data(WINDOW_ICON).unwrap();
-        main_win.set_icon(Some(window_icon));
+        main_win.set_icon(Some(PngImage::from_data(WINDOW_ICON).unwrap()));
 
         // Load all the images for clear/reload buttons
         let image_clear = read_image!(CL_BTN1);
@@ -450,6 +450,7 @@ impl WeeApp {
 
         let mut window = window::Window::default().with_label(&device.friendly_name);
         window.set_size(WIND_WIDTH, WIND_HEIGHT);
+        window.set_icon(Some(PngImage::from_data(WINDOW_ICON).unwrap()));
 
         let tab = group::Tabs::new(PADDING, PADDING, TAB_WIDTH, TAB_HEIGHT, "");
 
@@ -464,6 +465,9 @@ impl WeeApp {
         pack.set_color(Color::BackGround | Color::Red);
         pack.set_spacing(5);
 
+        pack.end();
+        grp1.end();
+
         if let Some(icons) = icons {
             let mut frame = frame::Frame::default().with_size(200, 200).center_of(&pack);
             frame.set_frame(enums::FrameType::FlatBox);
@@ -473,8 +477,6 @@ impl WeeApp {
 
             if icon.mimetype == mime::IMAGE_PNG {
                 if let Ok(img) = PngImage::from_data(icon.data.as_slice()) {
-                    info!("IMAGE H {}", img.h());
-                    info!("IMAGE W {}", img.w());
                     frame.set_image(Some(img));
                 }
             } else if icon.mimetype == mime::IMAGE_JPEG {
@@ -486,27 +488,23 @@ impl WeeApp {
                     frame.set_image(Some(img));
                 }
             }
+            pack.add(&frame);
         }
 
-        let spacer = frame::Frame::new(0, 0, 0, 50, "  ");
+        let spacer = frame::Frame::new(0, 0, 0, 30, "  ");
         pack.add(&spacer);
+        build_field!(pack, "          Name", &device.friendly_name);
+        build_field!(pack, "          Model", &device.model);
+        build_field!(pack, "          Hostname", &device.hostname);
+        build_field!(pack, "          Location", &device.location);
 
-        place_field!("          Name", &device.friendly_name);
-        place_field!("          Model", &device.model);
-        place_field!("          Hostname", &device.hostname);
-        place_field!("          Location", &device.location);
-
-        let mut mac = device.root.device.mac_address.clone();
-        mac.insert(10, ':');
-        mac.insert(8, ':');
-        mac.insert(6, ':');
-        mac.insert(4, ':');
-        mac.insert(2, ':');
-
-        place_field!("          MAC Address", &mac);
-
-        pack.end();
-        grp1.end();
+        if device.root.device.mac_address.len() == 12 {
+            let mut mac = device.root.device.mac_address.clone();
+            for i in [10, 8, 6, 4, 2] {
+                mac.insert(i, ':');
+            }
+            build_field!(pack, "          MAC Address", &mac);
+        }
 
         // TAB 2
         let grp2 = group::Group::new(PADDING, PADDING + 25, TAB_WIDTH, GROUP_HEIGHT, "Homepage\t");
@@ -526,10 +524,10 @@ impl WeeApp {
         name.set_frame(enums::FrameType::FlatBox);
         name.set_text_size(14);
 
-        scroll.scroll_to(0, 0);
-
         scroll.end();
+        scroll.scroll_to(0, 0);
         scroll.redraw();
+
         grp2.end();
         tab.end();
 
@@ -662,7 +660,6 @@ impl WeeApp {
                                         icons = Some(res);
                                     }
                                 }
-
                                 Self::show_popup(&device, icons);
                             } else {
                                 let state = if btn.color() == BUTTON_ON_COLOR {
