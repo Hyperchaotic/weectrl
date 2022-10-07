@@ -6,6 +6,7 @@ A cross platform library and application for controlling Belkin WeMo switches an
 
 ### Screenshots
 ![Screenshot-macOS](https://user-images.githubusercontent.com/19599562/193374117-9890c33d-c4f9-49ca-a1b2-9010daaecfa3.png)
+![info](https://user-images.githubusercontent.com/19599562/194636095-28ebccc5-7ab9-49e7-a1a8-acd7b77c67cf.png)
 ![Screenshot-Windows](https://user-images.githubusercontent.com/19599562/193374122-f3d494d4-3872-44c6-9ef6-7cf67923f16b.png)
 ![Screenshot-Linux](https://user-images.githubusercontent.com/19599562/193374125-3b5d8d51-763a-40b0-b8f8-bb21c9a5f4fc.png)
 
