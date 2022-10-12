@@ -313,7 +313,8 @@ impl WeeApp {
 
             Event::Show => {
                 info!("Event::Show");
-                info!("choice: {}", ch.value());
+                let scaling = DisplayScale::from(ch.value());
+                info!("choice: {:?}", scaling);
 
                 let screens = app::Screen::all_screens();
 
@@ -333,7 +334,8 @@ impl WeeApp {
             // When resizing the App window, reposition internal elements accordingly
             Event::Resize => {
                 info!("Event::Resize");
-                info!("choice: {}", ch.value());
+                let scaling: DisplayScale = ch.value().into();
+                info!("choice: {:?}", scaling);
 
                 let screens = app::Screen::all_screens();
 
@@ -498,12 +500,11 @@ impl WeeApp {
         build_field!(pack, "          Hostname", &device.hostname);
         build_field!(pack, "          Location", &device.location);
 
-        if device.root.device.mac_address.len() == 12 {
-            let mut mac = device.root.device.mac_address.clone();
-            for i in [10, 8, 6, 4, 2] {
-                mac.insert(i, ':');
-            }
-            build_field!(pack, "          MAC Address", &mac);
+        use advmac::{MacAddr6, MacAddrFormat};
+
+        if let Ok(mac) = MacAddr6::parse_str(&device.root.device.mac_address) {
+            let str = mac.format_string(MacAddrFormat::ColonNotation);
+            build_field!(pack, "          MAC Address", &str);
         }
 
         // TAB 2
