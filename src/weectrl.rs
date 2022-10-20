@@ -1,13 +1,20 @@
+use hyper::body::HttpBody;
+use hyper::server::conn::AddrStream;
+use hyper::service::{make_service_fn, service_fn};
+use hyper::{Body, HeaderMap, Request, Response, Server};
+use std::convert::Infallible;
+use std::net::SocketAddr;
 use std::str::FromStr;
 use std::time::Duration;
+use tokio::runtime::Runtime;
 use tracing::info;
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::{mpsc, Arc, Mutex};
 
+use std::net::IpAddr;
 use std::net::UdpSocket;
-use std::net::{IpAddr, SocketAddr};
 use std::{io::prelude::*, net::TcpListener};
 
 use crate::cache::{DeviceAddress, DiskCache};
@@ -130,6 +137,12 @@ pub struct DeviceInfo {
     pub root: Root,
     /// Device information, data from XML homepage
     pub xml: String,
+}
+
+#[derive(Clone)]
+struct ServerContext {
+    notification_mspsc: Arc<Mutex<Option<mpsc::Sender<StateNotification>>>>,
+    devices: Arc<Mutex<HashMap<String, Device>>>,
 }
 
 /// Controller entity used for finding and controlling Belkin WeMo, and compatible, devices.
@@ -508,123 +521,117 @@ impl WeeController {
         let unique_id = newdev.info.root.device.mac_address.clone();
 
         if let std::collections::hash_map::Entry::Vacant(e) = devs.entry(unique_id) {
-            info!("Registering dev: {:?}", newdev.sid());
+            info!("Registering dev: {:?}", newdev.info.unique_id);
             let info = newdev.info.clone();
             e.insert(newdev);
             return Ok(info);
         }
-
         Err(Error::DeviceAlreadyRegistered)
     }
 
-    /// Clear registered devices, optionally also disk cache
+    async fn handle(
+        context: ServerContext,
+        _addr: SocketAddr,
+        req: Request<Body>,
+    ) -> Result<Response<Body>, Infallible> {
+        let (parts, mut stream) = req.into_parts();
 
-    // This daemon will run until the process ends, listening for notifications.
+        let mut body = String::new();
+        while let Some(d) = stream.data().await {
+            if let Ok(s) = d {
+                body += std::str::from_utf8(&s).unwrap();
+            }
+        }
 
-    // This daemon will run until the process ends, listening for notifications.
-    fn notification_server(
+        // ok full message received, now process it
+        if body.len() > 0 && body.find("</e:propertyset>") != None {
+            // Extract SID and BinaryState
+            if let Some((notification_sid, state)) = Self::get_sid_and_state(&body, &parts.headers)
+            {
+                info!("str, sid {notification_sid} {}", state);
+                // If we have mathing SID, register and forward statechange
+                let devs = context.devices.lock().expect(FATAL_LOCK);
+                'search: for (unique_id, dev) in devs.iter() {
+                    if let Some(device_sid) = dev.sid() {
+                        // Found a match, send notification to the client
+                        if notification_sid == device_sid {
+                            info!(
+                                "Server got switch update for {:?}. sid: {:?}. State: {:?}.",
+                                unique_id,
+                                notification_sid,
+                                State::from(state)
+                            );
+
+                            let n = StateNotification {
+                                unique_id: unique_id.clone(),
+                                state: State::from(state),
+                            };
+
+                            let tx = context.notification_mspsc.lock().expect(FATAL_LOCK);
+                            match &*tx {
+                                None => info!("No listener, dropping notification."),
+                                Some(tx) => {
+                                    let _r = tx.send(n);
+                                }
+                            }
+                            break 'search;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(Response::new(Body::from("HTTP/1.1 200 OK")))
+    }
+
+    #[tokio::main()]
+    async fn notification_server(
         notification_mspsc: Arc<Mutex<Option<mpsc::Sender<StateNotification>>>>,
         devices: Arc<Mutex<HashMap<String, Device>>>,
         port: u16,
     ) {
+        // A `MakeService` that produces a `Service` to handle each connection.
+        let make_service = make_service_fn(move |conn: &AddrStream| {
+            let notification_mspsc = notification_mspsc.clone();
+            let devices = devices.clone();
+
+            let context = ServerContext {
+                notification_mspsc,
+                devices,
+            };
+            // You can grab the address of the incoming connection like so.
+            let addr = conn.remote_addr();
+
+            // Create a `Service` for responding to the request.
+            let service = service_fn(move |req| Self::handle(context.clone(), addr, req));
+
+            // Return the service to hyper.
+            async move { Ok::<_, Infallible>(service) }
+        });
+
+        // Run the server like above...
         let addr: SocketAddr = ([0, 0, 0, 0], port).into();
 
         info!("Listening to notifications on: {:?}", addr.to_string());
 
-        let listener = TcpListener::bind(&addr).unwrap();
-        let mut thread_count: u64 = 0;
+        let server = Server::bind(&addr).serve(make_service);
 
-        for stream in listener.incoming() {
-            let mut stream2;
-            match stream {
-                Ok(stream) => stream2 = stream,
-                Err(e) => {
-                    info!("Subscription server ended {:?}", e);
-                    break;
-                }
-            };
-
-            // Just for debug info
-            thread_count += 1;
-            let thread_number = thread_count;
-
-            let devices = devices.clone();
-            let tx = notification_mspsc.clone();
-
-            //Spawning off a thread for the connection.
-            let _ignore = std::thread::Builder::new()
-            .name("SUBSRV_handle_msg".to_string())
-            .spawn(move || {
-                let mut full_message = String::new();
-
-                'read_message: loop {
-                    let mut buffer = [0; 200];
-                    let size = stream2.read(&mut buffer).unwrap();
-                    if size == 0 {
-                        break 'read_message;
-                    }
-                    let str = String::from_utf8_lossy(&buffer[0..size]).to_string();
-                    full_message.push_str(&str);
-
-                    // ok full message received, now process it
-                    if str.find("</e:propertyset>") != None {
-                        // Extract SID and BinaryState
-                        if let Some((notification_sid, state)) =
-                            Self::get_sid_and_state(&full_message)
-                        {
-                            // If we have mathing SID, register and forward statechange
-                            let devs = devices.lock().expect(FATAL_LOCK);
-                            'search: for (unique_id, dev) in devs.iter()
-                            {
-                                if let Some(device_sid) = dev.sid() {
-                                    // Found a match, send notification to the client
-                                    if notification_sid == device_sid {
-                                        info!(
-                                            "Server thread {}. Got switch update for {:?}. sid: {:?}. State: {:?}.",
-                                            thread_number,
-                                            unique_id,
-                                            notification_sid,
-                                            State::from(state)
-                                        );
-
-                                        let n = StateNotification {
-                                            unique_id: unique_id.clone(),
-                                            state: State::from(state),
-                                        };
-
-                                        let tx = tx.lock().expect(FATAL_LOCK);
-                                        match &*tx {
-                                            None => info!("No listener, dropping notification."),
-                                            Some(tx) => { let _r = tx.send(n); },
-                                        }
-
-                                        break 'search;
-                                    }
-                                }
-                            }
-                        }
-
-                        let status_line = "HTTP/1.1 200 OK";
-                        let response = format!("{status_line}\r\ncontent-Length: 0\r\ncontent-type: text/html; charset=utf-8\r\nconnection: close\r\n");
-
-                        stream2.write_all(response.as_bytes()).unwrap();
-                        break 'read_message;
-                    }
-                }
-            });
+        if let Err(e) = server.await {
+            info!("server error: {}", e);
         }
     }
 
-    fn get_sid_and_state(message: &str) -> Option<(String, u8)> {
+    fn get_sid_and_state(body: &str, headers: &HeaderMap) -> Option<(String, u8)> {
         let mut sid = None;
-        for line in message.lines() {
-            if line.starts_with("SID: ") {
-                sid = Some(line.to_string().split_off(5));
-                break;
+
+        let hsid = headers.get("SID");
+        if let Some(h) = hsid {
+            if let Ok(f) = h.to_str() {
+                sid = Some(f.to_string());
             }
         }
 
-        let state = xml::get_binary_state(message);
+        let state = xml::get_binary_state(body);
 
         if sid != None && state != None {
             return Some((sid.unwrap(), state.unwrap()));
