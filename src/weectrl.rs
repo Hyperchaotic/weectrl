@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use std::time::Duration;
 use tracing::info;
 
@@ -14,9 +15,9 @@ use crate::device::Device;
 use crate::error;
 use crate::error::{Error, FATAL_LOCK};
 use crate::xml;
+pub use mime::Mime;
 use url::Url;
 use xml::Root;
-pub use mime::Mime;
 
 #[derive(Debug, Clone)]
 /// Notification from a device on network that binary state have changed.
@@ -50,6 +51,7 @@ pub enum DiscoveryMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Type of device
 pub enum Model {
     Lightswitch,
     Socket,
@@ -61,7 +63,7 @@ impl std::fmt::Display for Model {
         match self {
             Self::Lightswitch => write!(f, "Light Switch"),
             Self::Socket => write!(f, "Socket"),
-            Self::Unknown(str)  => write!(f, "{}", str),
+            Self::Unknown(str) => write!(f, "{}", str),
         }
     }
 }
@@ -77,7 +79,7 @@ impl<'a> From<&'a str> for Model {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Represents whether a device binarystate is on or off.
+/// Represents whether a device binary state is on or off.
 pub enum State {
     /// Device is switched on
     On,
@@ -89,19 +91,16 @@ pub enum State {
 
 impl std::fmt::Display for State {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-
         match *self {
             Self::On => f.write_str(xml::SETBINARYSTATEON),
             Self::Off => f.write_str(xml::SETBINARYSTATEOFF),
             Self::Unknown => f.write_str("UNKNOWN STATE"),
-        }                    
+        }
     }
 }
 
-
-
-
 #[derive(Debug, Clone)]
+// A WeMo swicth have an associated icon
 pub struct Icon {
     pub mimetype: Mime,
     pub width: u64,
@@ -111,7 +110,7 @@ pub struct Icon {
 }
 
 #[derive(Debug, Clone)]
-// Object returned for each device found during discovery.
+// Data returned for each device found during discovery.
 pub struct DeviceInfo {
     /// Human readable name returned from the device homepage.
     pub friendly_name: String,
@@ -133,11 +132,11 @@ pub struct DeviceInfo {
     pub xml: String,
 }
 
-/// Controller entity used for finding and control Belkin WeMo, and compatible, devices.
+/// Controller entity used for finding and controlling Belkin WeMo, and compatible, devices.
 pub struct WeeController {
     cache: Arc<Mutex<DiskCache>>,
     devices: Arc<Mutex<HashMap<String, Device>>>,
-    subscription_daemon: Arc<Mutex<bool>>,
+    notification_mpsc: Arc<Mutex<Option<mpsc::Sender<StateNotification>>>>,
     port: u16,
 }
 
@@ -147,153 +146,44 @@ impl Default for WeeController {
     }
 }
 
+impl Drop for WeeController {
+    fn drop(&mut self) {
+        info!("Dropping WeeController");
+        self.unsubscribe_all();
+    }
+}
+
 impl WeeController {
     #[must_use]
     pub fn new() -> Self {
-        // Find a free port number between 8000-9000
-        let available_port = Self::get_available_port().unwrap();
-
-        let object = Self {
-            cache: Arc::new(Mutex::new(DiskCache::new())),
-            devices: Arc::new(Mutex::new(HashMap::new())),
-            subscription_daemon: Arc::new(Mutex::new(false)),
-            port: available_port,
-        };
-
         info!("Init");
-        object
-    }
 
-    // Get the IP address of this PC, from the same interface talking to the device.
-    // It will be needed if subscriptions are used. It's not pretty but easiest way to Make
-    // sure we can talk to multiple devices on separate interfaces.
-    fn get_local_ip(location: &str) -> Result<IpAddr, Error> {
-        use std::net::TcpStream;
+        // Find a free port number between 8000-9000
+        let port = Self::get_available_port().unwrap();
+        let notification_mpsc = Arc::new(Mutex::new(None));
+        let devices = Arc::new(Mutex::new(HashMap::new()));
 
-        // extract ip:port from URL
-        let location_url = Url::parse(location)?;
-        if let Some(host) = location_url.host_str() {
-            let mut destination = String::from(host);
-            if let Some(port) = location_url.port() {
-                let port_str = format!(":{}", port);
-                destination.push_str(&port_str);
-            }
+        // Start the webserver listeninh for incoming notifications
+        let tx = notification_mpsc.clone();
+        let devs = devices.clone();
+        let _ignore = std::thread::Builder::new()
+            .name("SUB_server".to_string())
+            .spawn(move || {
+                Self::notification_server(tx, devs, port);
+            })
+            .expect("UNABLE TO START NOTFICATION THREAD");
 
-            // Create TCP connection from which we can get local IP.
-            let destination_str: &str = &destination;
-            let stream = TcpStream::connect(&destination_str)?;
-            let loc_ip = stream.local_addr()?;
-            return Ok(loc_ip.ip());
-        }
-        Err(Error::NoResponse)
-    }
-
-    // Retrieve a device home page.
-    fn get_device_home(location: &str) -> Result<String, Error> {
-        let res = reqwest::blocking::get(location)?;
-        let body = res.text()?;
-        Ok(body)
-    }
-
-    // Write list of active devices to disk cache
-    fn refresh_cache(cache: &Arc<Mutex<DiskCache>>, devices: &Arc<Mutex<HashMap<String, Device>>>) {
-        info!("Refreshing cache.");
-        let mut list = Vec::new();
-        for (mac, dev) in devices.lock().expect(FATAL_LOCK).iter() {
-            let location = dev.info.location.clone();
-            list.push(DeviceAddress {
-                location,
-                mac_address: mac.clone(),
-            });
-        }
-        cache.lock().expect(FATAL_LOCK).write(list);
-    }
-
-    // Given location URL, query a device. If successful add to list of active devices
-    fn retrieve_device(location: &str) -> Result<Device, Error> {
-        let xml = Self::get_device_home(location)?;
-        let local_ip = Self::get_local_ip(location)?;
-        let root: Root = xml::parse_services(&xml)?;
-
-        info!("Device {:?} {:?} ", root.device.friendly_name, location);
-
-        let mut hostname = String::new();
-        let mut base_url = Url::parse(location)?;
-        if let Some(hn) = base_url.host_str() {
-            hostname = hn.to_owned();
-        }
-        base_url.set_path("/");
-
-        let model = root.device.model_name.clone();
-        let model_str: &str = &model;
-        let info = DeviceInfo {
-            friendly_name: root.device.friendly_name.clone(),
-            model: Model::from(model_str),
-            unique_id: root.device.mac_address.clone(),
-            hostname,
-            base_url: base_url.to_string(),
-            location: location.to_string(),
-            state: State::Unknown,
-            root,
-            xml,
-        };
-        let mut dev = Device::new(info, local_ip);
-
-        if dev.validate_device() && dev.fetch_binary_state().ok().is_some() {
-            return Ok(dev);
-        }
-
-        info!("Device not supported.");
-        Err(Error::UnsupportedDevice)
-    }
-
-    // Add device to hashmap.
-    fn register_device(
-        location: &str,
-        devices: &Arc<Mutex<HashMap<String, Device>>>,
-    ) -> Result<DeviceInfo, Error> {
-        let newdev = Self::retrieve_device(location)?;
-        let mut devs = devices.lock().expect(FATAL_LOCK);
-        let unique_id = newdev.info.root.device.mac_address.clone();
-
-        if let std::collections::hash_map::Entry::Vacant(e) = devs.entry(unique_id) {
-            info!("Registering dev: {:?}", newdev.sid());
-            let info = newdev.info.clone();
-            e.insert(newdev);
-            return Ok(info);
-        }
-
-        Err(Error::DeviceAlreadyRegistered)
-    }
-
-    /// Retrieve and query devices. First read list stored on disk, then Broadcast
-    /// network query and wait for responses. Allow devices max `mx` seconds to respond.
-    /// This function is synchronous and will return everything found after mx seconds and a bit.
-    /// For an asynchronous version use `discover_async`.
-    /// `forget_devices` = true will clear the internal list of devices. Discovery will only
-    /// return devices to the client not already known internally.
-    pub fn discover(
-        &mut self,
-        mode: DiscoveryMode,
-        forget_devices: bool,
-        mx: u8,
-    ) -> Option<Vec<DeviceInfo>> {
-        let receiver = self.discover_async(mode, forget_devices, mx);
-        let mut list = Vec::new();
-
-        while let Ok(device) = receiver.recv() {
-            list.push(device);
-        }
-
-        if list.is_empty() {
-            None
-        } else {
-            Some(list)
+        // Build self
+        Self {
+            cache: Arc::new(Mutex::new(DiskCache::new())),
+            devices,
+            notification_mpsc,
+            port,
         }
     }
 
-    /// Clear registered devices, optionally also disk cache
-    pub fn clear(&mut self, clear_cache: bool) {
+    /// Forget all known devices, optionalle also clear the on-disk cache.
+    pub fn clear(&self, clear_cache: bool) {
         info!("Clearing list of devices. Clear disk; {:?}.", clear_cache);
         self.unsubscribe_all();
         if clear_cache {
@@ -302,66 +192,79 @@ impl WeeController {
         self.devices.lock().expect(FATAL_LOCK).clear();
     }
 
-    /// Set the device BinaryState (On/Off)
-    pub fn set_binary_state(&mut self, unique_id: &str, state: State) -> Result<State, Error> {
+    /// Set the device binary state (On/Off), e.g. toggle a switch.
+    pub fn set_binary_state(
+        &self,
+        unique_id: &str,
+        state: State,
+        conn_timeout: Duration,
+    ) -> Result<State, Error> {
         info!("Set binary state for Device {:?} {:?} ", unique_id, state);
         let mut devices = self.devices.lock().expect(FATAL_LOCK);
         if let Entry::Occupied(mut o) = devices.entry(unique_id.to_owned()) {
             let device = o.get_mut();
-            return device.set_binary_state(state);
+            return device.set_binary_state(state, conn_timeout);
         }
         Err(Error::UnknownDevice)
     }
 
-    /// Query the device for BinaryState (On/Off)
-    pub fn get_binary_state(&mut self, unique_id: &str) -> Result<State, Error> {
+    /// Query the device for the binary state (On/Off)
+    pub fn get_binary_state(
+        &self,
+        unique_id: &str,
+        conn_timeout: Duration,
+    ) -> Result<State, Error> {
         info!("get_binary_state for device {:?}.", unique_id);
         let mut devices = self.devices.lock().expect(FATAL_LOCK);
         if let Entry::Occupied(mut o) = devices.entry(unique_id.to_owned()) {
             let device = o.get_mut();
-            return device.fetch_binary_state();
+            return device.fetch_binary_state(conn_timeout);
         }
         Err(Error::UnknownDevice)
     }
 
-    /// Query the device for BinaryState (On/Off)
-    pub fn get_icons(&mut self, unique_id: &str) -> Result<Vec<Icon>, Error> {
+    /// Query the device for a list of icons
+    pub fn get_icons(&self, unique_id: &str, conn_timeout: Duration) -> Result<Vec<Icon>, Error> {
         info!("get_icons for device {:?}.", unique_id);
         let mut devices = self.devices.lock().expect(FATAL_LOCK);
         if let Entry::Occupied(mut o) = devices.entry(unique_id.to_owned()) {
             let device = o.get_mut();
-            return device.fetch_icons();
+            return device.fetch_icons(conn_timeout);
         }
         Err(Error::UnknownDevice)
     }
 
     /// Cancel subscription for notifications from all devices.
-    /// Make sure to cancel all subscriptions before dropping controller.
-    pub fn unsubscribe_all(&mut self) {
+    // @TODO spin off in threads?
+    pub fn unsubscribe_all(&self) {
         info!("unsubscribe_all.");
         let mut devices = self.devices.lock().expect(FATAL_LOCK);
         let unique_ids: Vec<String> = devices.keys().cloned().collect();
+        let mut handles = Vec::with_capacity(10);
+
         for unique_id in unique_ids {
             if let Entry::Occupied(mut o) = devices.entry(unique_id.clone()) {
-                let device = o.get_mut();
-                info!("unsubscribe {:?}.", unique_id);
-                let _ignore = device.unsubscribe();
+                let mut device = o.get_mut().clone();
+                handles.push(std::thread::spawn(move || {
+                    info!("unsubscribe {:?}.", unique_id);
+                    let _ignore = device.unsubscribe(Duration::from_secs(5));
+                }));
             }
         }
+        for handle in handles {
+            let _ignore = handle.join();
+        }
+        info!("Done unsubscribe_all.");
     }
 
     /// Cancel subscription for notifications from a device.
-    pub fn unsubscribe(&mut self, unique_id: &str) -> Result<String, Error> {
-        if !*(*self.subscription_daemon).lock().expect(FATAL_LOCK) {
-            return Err(Error::ServiceNotRunning);
-        }
-
+    pub fn unsubscribe(&self, unique_id: &str, conn_timeout: Duration) -> Result<String, Error> {
         let mut devices = self.devices.lock().expect(FATAL_LOCK);
         if let Entry::Occupied(mut o) = devices.entry(unique_id.to_owned()) {
             let device = o.get_mut();
 
             info!("unsubscribe {:?}.", unique_id);
-            return device.unsubscribe();
+            return device.unsubscribe(conn_timeout);
         }
         Err(Error::UnknownDevice)
     }
@@ -371,17 +274,13 @@ impl WeeController {
     /// be renewed automatically.
     /// Notifications will be returned via the mpsc returned from start_subscription_service.
     pub fn subscribe(
-        &mut self,
+        &self,
         unique_id: &str,
-        seconds: u32,
+        seconds: Duration,
         auto_resubscribe: bool,
+        conn_timeout: Duration,
     ) -> Result<u32, Error> {
-        if !*(*self.subscription_daemon).lock().expect(FATAL_LOCK) {
-            info!("Subscribe: ServiceNotRunning");
-            return Err(Error::ServiceNotRunning);
-        }
-
-        if seconds < 15 {
+        if seconds < Duration::from_secs(15) {
             info!("Subscribe: TimeoutTooShort");
             return Err(Error::TimeoutTooShort);
         }
@@ -390,7 +289,7 @@ impl WeeController {
         if let Entry::Occupied(mut o) = devices.entry(unique_id.to_owned()) {
             let device = o.get_mut();
             info!("subscribe {:?}.", unique_id);
-            let (_, time) = device.subscribe(self.port, seconds, auto_resubscribe)?;
+            let (_, time) = device.subscribe(self.port, seconds, auto_resubscribe, conn_timeout)?;
             return Ok(time);
         }
         info!("Subscribe: UnknownDevice");
@@ -402,11 +301,11 @@ impl WeeController {
     /// Allow network devices max `mx` seconds to respond.
     /// When discovery ends, after mx seconds and a bit, the channel will be closed.
     /// `forget_devices` = true will clear the internal list of devices.
-    pub fn discover_async(
-        &mut self,
+    pub fn discover(
+        &self,
         mode: DiscoveryMode,
         forget_devices: bool,
-        mx: u8,
+        mx: Duration,
     ) -> mpsc::Receiver<DeviceInfo> {
         if forget_devices {
             self.clear(false);
@@ -451,7 +350,7 @@ impl WeeController {
 
                     let mut buf = [0u8; 2048];
                     socket
-                        .set_read_timeout(Some(Duration::from_secs(u64::from(mx + 1))))
+                        .set_read_timeout(Some(mx + Duration::from_secs(1)))
                         .unwrap();
 
                     let (cache_dirt_tx, cache_dirt_rx) = mpsc::channel();
@@ -502,38 +401,130 @@ impl WeeController {
         rx
     }
 
+    /// Retrieve a mpsc on which to get notifications.
+    pub fn notify(&self) -> mpsc::Receiver<StateNotification> {
+        let (tx, rx) = mpsc::channel::<StateNotification>();
+        let mut notification_mpsc = self.notification_mpsc.lock().expect(FATAL_LOCK);
+        *notification_mpsc = Some(tx);
+        rx
+    }
     /// Setup the subscription service and retrieve a mpsc on which to get notifications.
     /// Required before subscribing to notifications for devices.
-    pub fn start_subscription_service(
-        &mut self,
-    ) -> Result<mpsc::Receiver<StateNotification>, error::Error> {
-        let mut running = self.subscription_daemon.lock().expect(FATAL_LOCK);
+    // Get the IP address of this PC, from the same interface talking to the device.
+    // It will be needed if subscriptions are used. It's not pretty but easiest way to Make
+    // sure we can talk to multiple devices on separate interfaces.
+    fn get_local_ip(location: &str) -> Result<IpAddr, Error> {
+        use std::net::TcpStream;
 
-        let mut res = Err(Error::ServiceAlreadyRunning);
-
-        {
-            // Start daemon listening for subscription updates, if not running.
-            if !*running {
-                let port = self.port;
-                let (tx, rx) = mpsc::channel();
-                let devices = self.devices.clone();
-
-                let _ignore = std::thread::Builder::new()
-                    .name("SUB_server".to_string())
-                    .spawn(move || {
-                        Self::subscription_server(&tx, &devices, port);
-                    });
-                res = Ok(rx);
-                *running = true;
+        // extract ip:port from URL
+        let location_url = Url::parse(location)?;
+        if let Some(host) = location_url.host_str() {
+            let mut destination = String::from(host);
+            if let Some(port) = location_url.port() {
+                let port_str = format!(":{}", port);
+                destination.push_str(&port_str);
             }
+
+            // Create TCP connection from which we can get local IP.
+            let destination_str: &str = &destination;
+            let stream = TcpStream::connect(&destination_str)?;
+            let loc_ip = stream.local_addr()?;
+            return Ok(loc_ip.ip());
         }
-        res
+        Err(Error::NoResponse)
     }
 
-    // This daemon will run until the process ends, listening for notifications.
-    fn subscription_server(
-        tx: &mpsc::Sender<StateNotification>,
+    // Retrieve a device home page.
+    fn get_device_home(location: &Url, conn_timeout: Duration) -> Result<String, Error> {
+        let response = super::rpc::http_get_text(location, conn_timeout)?;
+        Ok(response)
+    }
+
+    // Write list of active devices to disk cache
+    fn refresh_cache(cache: &Arc<Mutex<DiskCache>>, devices: &Arc<Mutex<HashMap<String, Device>>>) {
+        info!("Refreshing cache.");
+        let mut list = Vec::new();
+        for (mac, dev) in devices.lock().expect(FATAL_LOCK).iter() {
+            let location = dev.info.location.clone();
+            list.push(DeviceAddress {
+                location,
+                mac_address: mac.clone(),
+            });
+        }
+        cache.lock().expect(FATAL_LOCK).write(list);
+    }
+
+    // Given location URL, query a device. If successful add to list of active devices
+    fn retrieve_device(location: &str, conn_timeout: Duration) -> Result<Device, Error> {
+        let mut url = Url::from_str(location)?;
+        let xml = Self::get_device_home(&url, conn_timeout)?;
+        let local_ip = Self::get_local_ip(location)?;
+        let root: Root = xml::parse_services(&xml)?;
+
+        info!("Device {:?} {:?} ", root.device.friendly_name, location);
+
+        let mut hostname = String::new();
+        //let mut base_url = Url::parse(location)?;
+        if let Some(hn) = url.host_str() {
+            hostname = hn.to_owned();
+        }
+        url.set_path("/");
+
+        let model = root.device.model_name.clone();
+        let model_str: &str = &model;
+        let info = DeviceInfo {
+            friendly_name: root.device.friendly_name.clone(),
+            model: Model::from(model_str),
+            unique_id: root.device.mac_address.clone(),
+            hostname,
+            base_url: url.to_string(),
+            location: location.to_string(),
+            state: State::Unknown,
+            root,
+            xml,
+        };
+        let mut dev = Device::new(info, local_ip);
+
+        if dev.validate_device()
+            && dev
+                .fetch_binary_state(Duration::from_secs(5))
+                .ok()
+                .is_some()
+        {
+            return Ok(dev);
+        }
+
+        info!("Device not supported.");
+        Err(Error::UnsupportedDevice)
+    }
+
+    // Add device to hashmap.
+    fn register_device(
+        location: &str,
         devices: &Arc<Mutex<HashMap<String, Device>>>,
+    ) -> Result<DeviceInfo, Error> {
+        let newdev = Self::retrieve_device(location, Duration::from_secs(5))?;
+        let mut devs = devices.lock().expect(FATAL_LOCK);
+        let unique_id = newdev.info.root.device.mac_address.clone();
+
+        if let std::collections::hash_map::Entry::Vacant(e) = devs.entry(unique_id) {
+            info!("Registering dev: {:?}", newdev.sid());
+            let info = newdev.info.clone();
+            e.insert(newdev);
+            return Ok(info);
+        }
+
+        Err(Error::DeviceAlreadyRegistered)
+    }
+
+    /// Clear registered devices, optionally also disk cache
+
+    // This daemon will run until the process ends, listening for notifications.
+
+    // This daemon will run until the process ends, listening for notifications.
+    fn notification_server(
+        notification_mspsc: Arc<Mutex<Option<mpsc::Sender<StateNotification>>>>,
+        devices: Arc<Mutex<HashMap<String, Device>>>,
         port: u16,
     ) {
         let addr: SocketAddr = ([0, 0, 0, 0], port).into();
@@ -558,7 +549,7 @@ impl WeeController {
             let thread_number = thread_count;
 
             let devices = devices.clone();
-            let tx = tx.clone();
+            let tx = notification_mspsc.clone();
 
             //Spawning off a thread for the connection.
             let _ignore = std::thread::Builder::new()
@@ -582,8 +573,8 @@ impl WeeController {
                             Self::get_sid_and_state(&full_message)
                         {
                             // If we have mathing SID, register and forward statechange
-                            let devs = devices.lock().expect("FATAL_LOCK"); 
-                            'search: for (unique_id, dev) in devs.iter() 
+                            let devs = devices.lock().expect(FATAL_LOCK);
+                            'search: for (unique_id, dev) in devs.iter()
                             {
                                 if let Some(device_sid) = dev.sid() {
                                     // Found a match, send notification to the client
@@ -601,7 +592,11 @@ impl WeeController {
                                             state: State::from(state),
                                         };
 
-                                        let _r = tx.send(n);
+                                        let tx = tx.lock().expect(FATAL_LOCK);
+                                        match &*tx {
+                                            None => info!("No listener, dropping notification."),
+                                            Some(tx) => { let _r = tx.send(n); },
+                                        }
 
                                         break 'search;
                                     }
@@ -679,14 +674,14 @@ impl WeeController {
         None
     }
 
-    fn send_sddp_request(socket: &UdpSocket, mx: u8) {
+    fn send_sddp_request(socket: &UdpSocket, mx: Duration) {
         let msg = format!(
             "M-SEARCH * HTTP/1.1\r
 Host:239.255.255.250:1900\r
 Man:\"ssdp:discover\"\r
 ST: upnp:rootdevice\r
 MX: {}\r\n\r\n",
-            mx
+            mx.as_secs()
         );
 
         let broadcast_address: SocketAddr = ([239, 255, 255, 250], 1900).into();

@@ -12,6 +12,8 @@ use fltk::{enums::Color, enums::Event, image::PngImage, image::SvgImage, prelude
 use fltk_theme::widget_schemes::fluent::colors::*;
 use fltk_theme::{SchemeType, WidgetScheme};
 use std::collections::HashMap;
+use std::sync::mpsc::TryRecvError;
+use std::time::Duration;
 
 extern crate directories;
 use directories::ProjectDirs;
@@ -26,6 +28,7 @@ enum Message {
     Reload,
     Clear,
     StartDiscovery,
+    PollDiscovery,
     EndDiscovery,
     AddButton(DeviceInfo),
     Notification(StateNotification),
@@ -49,9 +52,10 @@ struct WeeApp {
 
 const SETTINGS_FILE: &str = "Settings.json";
 
-const SUBSCRIPTION_DURATION: u32 = 180;
+const SUBSCRIPTION_DURATION: Duration = Duration::from_secs(180);
 const SUBSCRIPTION_AUTO_RENEW: bool = true;
-const DISCOVERY_MX: u8 = 5;
+const DISCOVERY_MX: Duration = Duration::from_secs(5);
+const CONN_TIMEOUT: Duration = Duration::from_secs(5);
 
 const UNIT_SPACING: i32 = 40;
 const BUTTON_HEIGHT: i32 = UNIT_SPACING;
@@ -294,7 +298,7 @@ impl WeeApp {
         let mut ch = choice.clone();
         let mut prfr = progress_frame.clone();
 
-        let mut controller = WeeController::new();
+        let controller = WeeController::new();
 
         main_win.handle(move |w, ev| match ev {
             // When quitting the App save Windows size/position
@@ -382,7 +386,7 @@ impl WeeApp {
 
         // Create thread to receive notifications from switches that have changed state
         // It will forward the messages to the UI message loop so it can update the button color
-        let rx = controller.start_subscription_service().unwrap();
+        let rx = controller.notify();
         let sc = sender.clone();
         let _ignore = std::thread::Builder::new()
             .name("APP_notifiy".to_string())
@@ -411,35 +415,6 @@ impl WeeApp {
             buttons: HashMap::new(),
             scaling: choice,
         }
-    }
-
-    // Function to animate the spinner while searching for switches via SSDP
-    // runs about 30fps.
-    fn animate_search(
-        frm: frame::Frame,
-        mut progress: frame::Frame,
-        animation: &mut AnimatedSvg,
-        handle: app::TimeoutHandle,
-    ) {
-        //If the label has been cleared the search is over.
-        if frm.label().len() == 0 {
-            app::remove_timeout3(handle);
-            progress.hide();
-            return;
-        }
-
-        (*animation).rotate(4);
-
-        let mut img = animation.to_svg_image();
-
-        img.scale(21, 21, true, true);
-
-        progress.set_image(Some(img));
-        progress.hide();
-        progress.show();
-        progress.redraw();
-
-        app::repeat_timeout3(0.033, handle);
     }
 
     fn show_popup(device: &DeviceInfo, icons: Option<Vec<weectrl::Icon>>) {
@@ -538,6 +513,9 @@ impl WeeApp {
     }
 
     pub fn run(mut self) {
+        let mut disc_mpsc: Option<std::sync::mpsc::Receiver<DeviceInfo>> = None;
+        let mut timeout_handle: Option<app::TimeoutHandle> = None;
+        let mut animation = AnimatedSvg::new(PROGRESS);
         while self.app.wait() {
             if let Some(msg) = self.receiver.recv() {
                 match msg {
@@ -606,6 +584,7 @@ impl WeeApp {
                             &device.unique_id,
                             SUBSCRIPTION_DURATION,
                             SUBSCRIPTION_AUTO_RENEW,
+                            CONN_TIMEOUT,
                         );
 
                         let mut but = button::Button::default()
@@ -656,7 +635,9 @@ impl WeeApp {
                         if let Some(btn) = self.buttons.get_mut(&device.unique_id) {
                             if app::event_mouse_button() == MouseButton::Right {
                                 let mut icons: Option<Vec<weectrl::Icon>> = None;
-                                if let Ok(res) = self.controller.get_icons(&device.unique_id) {
+                                if let Ok(res) =
+                                    self.controller.get_icons(&device.unique_id, CONN_TIMEOUT)
+                                {
                                     if res.len() > 0 {
                                         icons = Some(res);
                                     }
@@ -669,9 +650,11 @@ impl WeeApp {
                                     State::On
                                 };
 
-                                if let Ok(ret_state) =
-                                    self.controller.set_binary_state(&device.unique_id, state)
-                                {
+                                if let Ok(ret_state) = self.controller.set_binary_state(
+                                    &device.unique_id,
+                                    state,
+                                    CONN_TIMEOUT,
+                                ) {
                                     if ret_state == State::On {
                                         btn.set_color(BUTTON_ON_COLOR);
                                     } else {
@@ -688,42 +671,55 @@ impl WeeApp {
                     Message::StartDiscovery => {
                         info!("Message::StartDiscovery");
                         self.discovering = true;
-
                         self.reloading_frame.set_label("Searching");
+                        self.reloading_frame.show();
 
-                        let frm = self.reloading_frame.clone();
-                        let pgs = self.progress_frame.clone();
-
-                        let mut animation = AnimatedSvg::new(PROGRESS);
-                        app::add_timeout3(0.05, move |handle| {
-                            let frm = frm.clone();
-                            let pgs = pgs.clone();
-                            Self::animate_search(frm, pgs, &mut animation, handle);
-                        });
-
-                        let s = self.sender.clone();
-
-                        let rx = self.controller.discover_async(
+                        disc_mpsc = Some(self.controller.discover(
                             DiscoveryMode::CacheAndBroadcast,
                             false,
                             DISCOVERY_MX,
-                        );
-                        let _ignore = std::thread::Builder::new()
-                            .name("APP_discovery".to_string())
-                            .spawn(move || {
-                                loop {
-                                    let msg = rx.recv();
-                                    info!("Discover thread forwarding");
+                        ));
 
-                                    if let Ok(dev) = msg {
-                                        s.send(Message::AddButton(dev));
-                                    } else {
-                                        s.send(Message::EndDiscovery);
-                                        break; // End thread
+                        // Start polling mechanism and UI spinner
+                        let s = self.sender.clone();
+                        timeout_handle = Some(app::add_timeout3(0.05, move |_| {
+                            s.send(Message::PollDiscovery)
+                        }));
+                    }
+
+                    // Since we animate the spinner by rotating it at 30fps we might as well
+                    // just poll the discovery future mpsc here.
+                    // When the future returns None we can move to EndDiscovery.
+                    Message::PollDiscovery => {
+                        //info!("Message::PollDiscovery");
+                        if let Some(d) = disc_mpsc.as_mut() {
+                            // Animate spinner
+                            animation.rotate(4);
+                            let mut img = animation.to_svg_image();
+                            img.scale(21, 21, true, true);
+                            self.progress_frame.set_image(Some(img));
+                            self.progress_frame.hide();
+                            self.progress_frame.show();
+                            self.progress_frame.redraw();
+
+                            // poll again in 33 ms
+                            if let Some(h) = timeout_handle {
+                                app::repeat_timeout3(0.033, h);
+                            }
+
+                            // Check channel for news or disconnection(discovery finished)
+                            match d.try_recv() {
+                                Ok(d) => self.sender.send(Message::AddButton(d)),
+                                Err(TryRecvError::Disconnected) => {
+                                    info!("Ending discovery");
+                                    if let Some(h) = timeout_handle {
+                                        app::remove_timeout3(h);
                                     }
+                                    self.sender.send(Message::EndDiscovery);
                                 }
-                            })
-                            .unwrap();
+                                Err(TryRecvError::Empty) => (),
+                            };
+                        }
                     }
 
                     // Discovery phase ended, update UI accordingly.
@@ -731,7 +727,8 @@ impl WeeApp {
                         info!("Message::EndDiscovery");
                         self.discovering = false;
                         self.scaling.show();
-                        self.reloading_frame.set_label("");
+                        self.progress_frame.hide();
+                        self.reloading_frame.hide();
                     }
 
                     // A switch have changed state, update the UI accordingly.
@@ -836,17 +833,6 @@ impl AnimatedSvg {
     }
 }
 
-fn main() {
-    use tracing_subscriber::fmt::time;
-
-    tracing_subscriber::fmt()
-        .with_timer(time::LocalTime::rfc_3339())
-        .init();
-
-    let a = WeeApp::new();
-    a.run();
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Settings {
     x: i32,
@@ -918,4 +904,14 @@ impl Storage {
             let _ignore = std::fs::remove_file(fpath);
         }
     }
+}
+
+fn main() {
+    use tracing_subscriber::fmt::time;
+
+    tracing_subscriber::fmt()
+        .with_timer(time::LocalTime::rfc_3339())
+        .init();
+
+    WeeApp::new().run();
 }

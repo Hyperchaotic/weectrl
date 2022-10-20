@@ -1,8 +1,10 @@
 use std::net::IpAddr;
+use std::str::FromStr;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::{thread, time};
+use std::{thread, time::Duration};
 use tracing::info;
+use url::Url;
 
 use crate::error;
 use crate::error::Error;
@@ -68,21 +70,21 @@ impl Device {
 
     fn cancel_subscription_daemon(&mut self) {
         if let Some(daemon) = self.subscription_daemon.clone() {
-            info!("Cancel subscription daemon");
+            info!("Cancel subscription daemon for {}", self.info.friendly_name);
             let _ = daemon.send(());
             self.subscription_daemon = None;
         }
     }
 
     /// Send unsubscribe command and cancel the daemon if active.
-    pub fn unsubscribe(&mut self) -> Result<String, Error> {
-        info!("UnSubscribe");
+    pub fn unsubscribe(&mut self, conn_timeout: Duration) -> Result<String, Error> {
+        info!("UnSubscribe {} {:?}", self.info.friendly_name, self.sid);
         self.cancel_subscription_daemon();
 
         if let Some(sid_shared) = self.sid.clone() {
             let req_url = Self::make_request_url(&self.info.base_url, &self.event_path)?;
             let sid = sid_shared.lock().expect(error::FATAL_LOCK).clone();
-            let _ = rpc::unsubscribe_action(&req_url, &sid)?; // TODO check statuscode
+            let _ = rpc::unsubscribe_action(&req_url, &sid, conn_timeout)?; // TODO check statuscode
             self.sid = None;
             return Ok(sid);
         }
@@ -91,14 +93,14 @@ impl Device {
 
     // Concatenate basic URL with request path.
     // e.g. "http://192.168.0.10/ with "upnp/event/basicevent1".
-    fn make_request_url(base_url: &str, req_path: &Option<String>) -> Result<String, Error> {
+    fn make_request_url(base_url: &str, req_path: &Option<String>) -> Result<Url, Error> {
         if let Some(ref path) = *req_path {
             let mut req_url = base_url.to_owned();
             if req_url.ends_with('/') && path.starts_with('/') {
                 req_url = req_url.trim_end_matches('/').to_owned();
             }
             req_url.push_str(path);
-            return Ok(req_url);
+            return Ok(Url::from_str(&req_url)?);
         }
         Err(Error::UnsupportedDevice)
     }
@@ -107,14 +109,15 @@ impl Device {
     pub fn subscribe(
         &mut self,
         port: u16,
-        seconds: u32,
+        seconds: Duration,
         auto_resubscribe: bool,
+        conn_timeout: Duration,
     ) -> Result<(String, u32), Error> {
         info!("Subscribe");
         let callback = format!("<http://{}:{}/>", self.local_ip, port);
         let req_url = Self::make_request_url(&self.info.base_url, &self.event_path)?;
         self.cancel_subscription_daemon();
-        let res = rpc::subscribe(&req_url, seconds, &callback)?;
+        let res = rpc::subscribe(&req_url, seconds, &callback, conn_timeout)?;
 
         let new_sid = Arc::new(Mutex::new(res.sid.clone()));
         self.sid = Some(new_sid.clone());
@@ -135,15 +138,14 @@ impl Device {
 
     fn subscription_daemon(
         rx: &mpsc::Receiver<()>,
-        url: &str,
+        url: &Url,
         device_sid: &Arc<Mutex<String>>,
-        initial_seconds: u32,
+        initial_seconds: Duration,
         callback: &str,
     ) {
         use std::sync::mpsc::TryRecvError;
-        use time::Duration;
 
-        let mut duration = Duration::from_secs(u64::from(initial_seconds - 10));
+        let mut duration = initial_seconds - Duration::from_secs(10);
 
         loop {
             thread::sleep(duration);
@@ -153,9 +155,9 @@ impl Device {
                 _ => break,
             }
             info!("Resubscribing.");
-            match rpc::subscribe(url, initial_seconds, callback) {
+            match rpc::subscribe(url, initial_seconds, callback, Duration::from_secs(5)) {
                 Ok(res) => {
-                    duration = time::Duration::from_secs(u64::from(res.timeout - 10)); // Switch returns timeout we need to obey.
+                    duration = Duration::from_secs(u64::from(res.timeout - 10)); // Switch returns timeout we need to obey.
                     let mut sid_ref = device_sid.lock().expect(error::FATAL_LOCK);
                     sid_ref.clear();
                     sid_ref.push_str(&res.sid);
@@ -169,7 +171,7 @@ impl Device {
     }
 
     /// Retrieve current switch binarystate.
-    pub fn fetch_icons(&mut self) -> Result<Vec<Icon>, Error> {
+    pub fn fetch_icons(&mut self, conn_timeout: Duration) -> Result<Vec<Icon>, Error> {
         let mut icon_list = Vec::new();
 
         self.info.state = State::Unknown;
@@ -182,7 +184,7 @@ impl Device {
             let req_file = Some(xmlicon.url.clone());
             let req_url = Self::make_request_url(&self.info.base_url, &req_file)?;
 
-            let data = rpc::http_get(&req_url)?;
+            let data = rpc::http_get_bytes(&req_url, conn_timeout)?;
 
             // Image type is unreliable, so we have to peek in the data stream to detect it.
             let mimetype: mime::Mime = match data.as_slice() {
@@ -215,7 +217,7 @@ impl Device {
     }
 
     /// Retrieve current switch binarystate.
-    pub fn fetch_binary_state(&mut self) -> Result<State, Error> {
+    pub fn fetch_binary_state(&mut self, conn_timeout: Duration) -> Result<State, Error> {
         self.info.state = State::Unknown;
 
         let req_url = Self::make_request_url(&self.info.base_url, &self.binary_control_path)?;
@@ -224,19 +226,23 @@ impl Device {
             &req_url,
             "\"urn:Belkin:service:basicevent:1#GetBinaryState\"",
             xml::GETBINARYSTATE,
+            conn_timeout,
         )?;
 
         if let Some(state) = xml::get_binary_state(&http_response) {
             self.info.state = State::from(state);
-        } else {
-            return Err(Error::InvalidState);
+            return Ok(self.info.state);
         }
 
-        Ok(self.info.state)
+        return Err(Error::InvalidState);
     }
 
     /// Send command to toggle switch state. If toggeling to same state an Error is returned.
-    pub fn set_binary_state(&mut self, state: State) -> Result<State, Error> {
+    pub fn set_binary_state(
+        &mut self,
+        state: State,
+        conn_timeout: Duration,
+    ) -> Result<State, Error> {
         if state == State::Unknown {
             return Err(Error::InvalidState);
         }
@@ -247,6 +253,7 @@ impl Device {
             &req_url,
             "\"urn:Belkin:service:basicevent:1#SetBinaryState\"",
             &state.to_string(),
+            conn_timeout,
         )?;
 
         self.info.state = state;
