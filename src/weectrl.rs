@@ -1,12 +1,10 @@
 use hyper::body::HttpBody;
-use hyper::server::conn::AddrStream;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, HeaderMap, Request, Response, Server};
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::time::Duration;
-use tokio::runtime::Runtime;
 use tracing::info;
 
 use std::collections::hash_map::Entry;
@@ -14,8 +12,8 @@ use std::collections::HashMap;
 use std::sync::{mpsc, Arc, Mutex};
 
 use std::net::IpAddr;
+use std::net::TcpListener;
 use std::net::UdpSocket;
-use std::{io::prelude::*, net::TcpListener};
 
 use crate::cache::{DeviceAddress, DiskCache};
 use crate::device::Device;
@@ -137,12 +135,6 @@ pub struct DeviceInfo {
     pub root: Root,
     /// Device information, data from XML homepage
     pub xml: String,
-}
-
-#[derive(Clone)]
-struct ServerContext {
-    notification_mspsc: Arc<Mutex<Option<mpsc::Sender<StateNotification>>>>,
-    devices: Arc<Mutex<HashMap<String, Device>>>,
 }
 
 /// Controller entity used for finding and controlling Belkin WeMo, and compatible, devices.
@@ -529,13 +521,14 @@ impl WeeController {
         Err(Error::DeviceAlreadyRegistered)
     }
 
-    async fn handle(
-        context: ServerContext,
-        _addr: SocketAddr,
+    async fn http_req_handler(
+        notification_mspsc: Arc<Mutex<Option<mpsc::Sender<StateNotification>>>>,
+        devices: Arc<Mutex<HashMap<String, Device>>>,
         req: Request<Body>,
     ) -> Result<Response<Body>, Infallible> {
         let (parts, mut stream) = req.into_parts();
 
+        // Retrieve the entire message body
         let mut body = String::new();
         while let Some(d) = stream.data().await {
             if let Ok(s) = d {
@@ -543,14 +536,14 @@ impl WeeController {
             }
         }
 
-        // ok full message received, now process it
+        // Ok full message received, now process it
         if body.len() > 0 && body.find("</e:propertyset>") != None {
             // Extract SID and BinaryState
             if let Some((notification_sid, state)) = Self::get_sid_and_state(&body, &parts.headers)
             {
                 info!("str, sid {notification_sid} {}", state);
                 // If we have mathing SID, register and forward statechange
-                let devs = context.devices.lock().expect(FATAL_LOCK);
+                let devs = devices.lock().expect(FATAL_LOCK);
                 'search: for (unique_id, dev) in devs.iter() {
                     if let Some(device_sid) = dev.sid() {
                         // Found a match, send notification to the client
@@ -567,7 +560,7 @@ impl WeeController {
                                 state: State::from(state),
                             };
 
-                            let tx = context.notification_mspsc.lock().expect(FATAL_LOCK);
+                            let tx = notification_mspsc.lock().expect(FATAL_LOCK);
                             match &*tx {
                                 None => info!("No listener, dropping notification."),
                                 Some(tx) => {
@@ -581,7 +574,7 @@ impl WeeController {
             }
         }
 
-        Ok(Response::new(Body::from("HTTP/1.1 200 OK")))
+        Ok(Response::new(Body::from("")))
     }
 
     #[tokio::main()]
@@ -591,25 +584,19 @@ impl WeeController {
         port: u16,
     ) {
         // A `MakeService` that produces a `Service` to handle each connection.
-        let make_service = make_service_fn(move |conn: &AddrStream| {
+        let make_service = make_service_fn(move |_| {
             let notification_mspsc = notification_mspsc.clone();
             let devices = devices.clone();
 
-            let context = ServerContext {
-                notification_mspsc,
-                devices,
-            };
-            // You can grab the address of the incoming connection like so.
-            let addr = conn.remote_addr();
-
             // Create a `Service` for responding to the request.
-            let service = service_fn(move |req| Self::handle(context.clone(), addr, req));
+            let service = service_fn(move |req| {
+                Self::http_req_handler(notification_mspsc.clone(), devices.clone(), req)
+            });
 
             // Return the service to hyper.
             async move { Ok::<_, Infallible>(service) }
         });
 
-        // Run the server like above...
         let addr: SocketAddr = ([0, 0, 0, 0], port).into();
 
         info!("Listening to notifications on: {:?}", addr.to_string());
@@ -659,23 +646,13 @@ impl WeeController {
     }
 
     fn parse_ssdp_response(response: &str) -> Option<String> {
-        if response.find("HTTP/1.1 200 OK") == None {
-            return None;
-        }
-
         for line in response.lines() {
-            let mut split = line.splitn(2, ':');
-
-            if let Some(y) = split.next() {
-                if y.eq_ignore_ascii_case("location") {
-                    if let Some(location) = split.next() {
-                        return Some(location.trim().to_string());
-                    }
-                    break;
+            let line = line.to_lowercase();
+            if line.contains("location") {
+                if let Some(idx) = line.find("http") {
+                    let url = &line[idx..line.len()];
+                    return Some(url.trim().to_string());
                 }
-                let _ = split.next();
-            } else {
-                break;
             }
         }
         None
@@ -684,14 +661,16 @@ impl WeeController {
     fn send_sddp_request(socket: &UdpSocket, mx: Duration) {
         let msg = format!(
             "M-SEARCH * HTTP/1.1\r
-Host:239.255.255.250:1900\r
-Man:\"ssdp:discover\"\r
+Host: 239.255.255.250:1900\r
+Man: \"ssdp:discover\"\r
 ST: upnp:rootdevice\r
-MX: {}\r\n\r\n",
+MX: {}\r
+Content-Length: 0\r\n\r\n",
             mx.as_secs()
         );
 
         let broadcast_address: SocketAddr = ([239, 255, 255, 250], 1900).into();
+        let _ = socket.set_broadcast(true);
         socket.send_to(msg.as_bytes(), &broadcast_address).unwrap();
     }
 }
