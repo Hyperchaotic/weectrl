@@ -7,6 +7,7 @@ use std::str::FromStr;
 use std::time::Duration;
 use tracing::info;
 
+use futures::channel::mpsc as mpsc_future;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::{mpsc, Arc, Mutex};
@@ -219,7 +220,7 @@ impl WeeController {
         unique_id: &str,
         conn_timeout: Duration,
     ) -> Result<State, Error> {
-        info!("get_binary_state for device {:?}.", unique_id);
+        info!("Get_binary_state for device {:?}.", unique_id);
         let mut devices = self.devices.lock().expect(FATAL_LOCK);
         if let Entry::Occupied(mut o) = devices.entry(unique_id.to_owned()) {
             let device = o.get_mut();
@@ -230,11 +231,22 @@ impl WeeController {
 
     /// Query the device for a list of icons
     pub fn get_icons(&self, unique_id: &str, conn_timeout: Duration) -> Result<Vec<Icon>, Error> {
-        info!("get_icons for device {:?}.", unique_id);
+        info!("Get_icons for device {:?}.", unique_id);
         let mut devices = self.devices.lock().expect(FATAL_LOCK);
         if let Entry::Occupied(mut o) = devices.entry(unique_id.to_owned()) {
             let device = o.get_mut();
             return device.fetch_icons(conn_timeout);
+        }
+        Err(Error::UnknownDevice)
+    }
+
+    /// Return the cached DeviceInfo structure, which was retrieved during discovery.
+    pub fn get_info(&self, unique_id: &str) -> Result<DeviceInfo, Error> {
+        info!("Get information for device {:?}.", unique_id);
+        let mut devices = self.devices.lock().expect(FATAL_LOCK);
+        if let Entry::Occupied(mut o) = devices.entry(unique_id.to_owned()) {
+            let device = o.get_mut();
+            return Ok(device.info.clone());
         }
         Err(Error::UnknownDevice)
     }
@@ -299,6 +311,35 @@ impl WeeController {
         }
         info!("Subscribe: UnknownDevice");
         Err(Error::UnknownDevice)
+    }
+
+    /// Read list of know devices from disk cache as well as new devices responding on the network.
+    /// Returns immediately and send discovered devices back on the mpsc future as they're found.
+    /// Allow network devices max `mx` seconds to respond.
+    /// When discovery ends, after mx seconds and a bit, the channel will be closed.
+    /// `forget_devices` = true will clear the internal list of devices.
+    /// Futures alternative to fn Discover(...)
+    pub fn discover_future(
+        &self,
+        mode: DiscoveryMode,
+        forget_devices: bool,
+        mx: Duration,
+    ) -> mpsc_future::UnboundedReceiver<DeviceInfo> {
+        let rx = self.discover(mode, forget_devices, mx);
+
+        let (tx_fut, rx_fut) = mpsc_future::unbounded();
+
+        // Just wrap the standard mpsc version, easy with unbounded channels
+        let _ = std::thread::Builder::new()
+            .name("Discovery future proxy".to_string())
+            .spawn(move || {
+                info!("Starting discovery future proxy thread");
+                while let Ok(device) = rx.recv() {
+                    info!("Future thread Sending {}.", device.friendly_name);
+                    let _ = tx_fut.unbounded_send(device);
+                }
+            });
+        rx_fut
     }
 
     /// Read list of know devices from disk cache as well as new devices responding on the network.
@@ -406,6 +447,25 @@ impl WeeController {
         rx
     }
 
+    /// Retrieve a mpsc future (stream) on which to get notifications.
+    /// Futures alternative to get_notifications.
+    pub fn notify_future(&self) -> mpsc_future::UnboundedReceiver<StateNotification> {
+        let rx = self.notify();
+
+        let (tx_fut, rx_fut) = mpsc_future::unbounded();
+
+        // Just wrap the standard mpsc version, easy with unbounded channels
+        let _ = std::thread::Builder::new()
+            .name("subscription future proxy".to_string())
+            .spawn(move || {
+                info!("Starting subscription future proxy thread");
+                while let Ok(notification) = rx.recv() {
+                    let _ = tx_fut.unbounded_send(notification);
+                }
+            });
+        rx_fut
+    }
+
     /// Retrieve a mpsc on which to get notifications.
     pub fn notify(&self) -> mpsc::Receiver<StateNotification> {
         let (tx, rx) = mpsc::channel::<StateNotification>();
@@ -413,8 +473,7 @@ impl WeeController {
         *notification_mpsc = Some(tx);
         rx
     }
-    /// Setup the subscription service and retrieve a mpsc on which to get notifications.
-    /// Required before subscribing to notifications for devices.
+
     // Get the IP address of this PC, from the same interface talking to the device.
     // It will be needed if subscriptions are used. It's not pretty but easiest way to Make
     // sure we can talk to multiple devices on separate interfaces.
