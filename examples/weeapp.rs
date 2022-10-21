@@ -297,7 +297,6 @@ impl WeeApp {
         let mut rlfr = reloading_frame.clone();
         let mut ch = choice.clone();
         let mut prfr = progress_frame.clone();
-
         let controller = WeeController::new();
 
         main_win.handle(move |w, ev| match ev {
@@ -332,7 +331,8 @@ impl WeeApp {
                     let mut btn = pa.child(i).unwrap();
                     btn.set_size(pa.w(), BUTTON_HEIGHT);
                 }
-                false
+
+                true
             }
 
             // When resizing the App window, reposition internal elements accordingly
@@ -520,34 +520,17 @@ impl WeeApp {
             if let Some(msg) = self.receiver.recv() {
                 match msg {
                     Message::ScaleApp => {
-                        info!("Message::ScaleApp. choice size {}", self.scaling.value());
+                        let scale = DisplayScale::from(self.scaling.value());
+                        info!(
+                            "Message::ScaleApp. choice size {}/{:?}",
+                            self.scaling.value(),
+                            scale
+                        );
                         let screens = app::Screen::all_screens();
 
                         for &s in &screens {
                             info!("screen size {}", s.scale());
-                        }
-
-                        match self.scaling.value() {
-                            0 => {
-                                for &s in &screens {
-                                    s.set_scale(1.0);
-                                }
-                            }
-                            1 => {
-                                for &s in &screens {
-                                    s.set_scale(0.9);
-                                }
-                            }
-                            2 => {
-                                for &s in &screens {
-                                    s.set_scale(0.8);
-                                }
-                            }
-                            _ => unreachable!(),
-                        }
-                        app::redraw();
-                        for &s in &screens {
-                            info!("screen size {}", s.scale());
+                            s.set_scale(scale.into());
                         }
                     }
                     // Clear button pressed, forget all switches and clear the UI
