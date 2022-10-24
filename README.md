@@ -38,11 +38,11 @@ rcedit target\release\examples\weeapp.exe --set-icon examples\images\icon.ico
 
 ## weectrl, the library
 ### Functionality
-* Discover devices synchronously or asynchronously (threaded).
+* Discover devices on the network.
 * Retrieve detailed device information.
 * Switch devices on or off.
 * Cache known devices on disk for quick reload.
-* Subscription to state change notifications from devices.
+* Subscription to state change notifications from devices if they're toggled.
 * Uses the Tracing crate for logging.
 
 ### API examples
@@ -56,7 +56,7 @@ use weectrl::{DeviceInfo, DiscoveryMode, State, StateNotification, WeeController
 let controller = WeeController::new();
 ```
 
-To discover devices on network or/and in cache asynchronously:
+To discover devices on network or/and in cache. starting by reading list of known devices from the disk cache, then broadcasts network query:
 ``` rust
 
 let rx: std::sync::mpsc::Receiver<DeviceInfo> = controller.discover(
