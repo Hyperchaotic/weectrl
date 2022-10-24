@@ -50,63 +50,76 @@ rcedit target\release\examples\weeapp.exe --set-icon examples\images\icon.ico
 #### Initialization and discovery
 Create new instance of controller:
 ``` rust
-extern crate weectrl;
 
 use weectrl::*;
 
-let mut controller = WeeController::new();
+let controller = WeeController::new();
 ```
 
 To discover devices on network or/and in cache asynchronously:
 ``` rust
 
-
-let rx: mpsc::Receiver<DeviceInfo> = self.controller.discover_async(
+let rx: std::sync::mpsc::Receiver<DeviceInfo> = controller.discover(
     DiscoveryMode::CacheAndBroadcast, 
     true, 
     5, 
     );
 ```
 Scans both disk cache file and network, will "forget" in-memory list first. Give network devices maximum 5 seconds to respond.
-The ```Receiver``` will receive device information as they're found and when discovery ends the channel will be closed.
+When discovery ends the channel will be closed.
 
-Blocking version of the discover function.
+Futures version of the discover function.
 ``` rust
-let list: Option<Vec<DeviceInfo>> = controller.discover(DiscoveryMode::CacheAndBroadcast, true, 5);
+
+let notifications: futures::channel::mpsc::UnboundedReceiver<DeviceInfo> = controller.discover_future(
+    DiscoveryMode::CacheAndBroadcast, 
+    true, 
+    5, 
+    );
 ```
-Returns when scan is done. Can take many seconds.
 
 
 #### Switching and notifications
 
 Let `unique_id` be a `DeviceInfo::unique_id` returned by previous discovery.
 
-Starting listening for notifications from subscribed devices:
+Starting listening for notifications from subscribed devices. If called several times only the most recent `rx` channel will receive notifications:
 ``` rust
-let rx: mpsc::Receiver<StateNotification> = controller.start_subscription_service().unwrap();
-```
-Whenever a switch is toggled a message will appear on the Receiver. This channel will live for the duration
-of the application. 
 
-Subscribe to notifications for a device and instruct WeeController to automatically refresh subscriptions every 120 seconds before they expire:
+let rx: std::sync::mpsc::Receiver<StateNotification> = controller.notify();
+```
+Whenever a switch is toggled a message will appear on the Receiver.
+
+Futures version.
 ``` rust
-controller.subscribe(&unique_id, 120, true).unwrap();
+
+let notifications_fut: futures::channel::mpsc::UnboundedReceiver<StateNotification> = controller.notify_future();
+```
+
+Subscribe to notifications for a device and instruct WeeController to automatically refresh subscriptions every 120 seconds before they expire.
+As this causes a network request to be made to the switch a 5 second network timeout is set for the request in case the switch doesn't respond:
+``` rust
+
+let result = controller.subscribe(&unique_id, Duration::from_secs(120), true, Duration::from_secs(5));
 ```
 
 Unsubscribe from notifications from one device:
 ``` rust
-controller.unsubscribe(&unique_id).unwrap();
+
+let result = controller.unsubscribe(&unique_id, Duration::from_secs(5));
 ```
 
-Unsubscribe from all notifications.
+Unsubscribe from all notifications:
 ``` rust
+
 controller.unsubscribe_all();
 ```
 
-To toggle a switch:
+To toggle a switch (on or off):
 ``` rust
-let res = controller.set_binary_state(unique_id, State::On);
- match res {
+
+let result = controller.set_binary_state(unique_id, State::On, Duration::from_secs(5));
+ match result {
     Ok(state) => println!("Ok({:?})", state),
     Err(err) => println!("Err({:?})", err),
 }
@@ -114,14 +127,29 @@ let res = controller.set_binary_state(unique_id, State::On);
 
 To get a switch state:
 ``` rust
-let res = controller.get_binary_state(unique_id);
- match res {
+
+let result = controller.get_binary_state(unique_id, Duration::from_secs(5));
+ match result {
     Ok(state) => println!("Ok({:?})", state),
     Err(err) => println!("Err({:?})", err),
 }
 ```
+
+Retrive icons stored in a switch:
+``` rust
+
+let list: Result<Vec<Icon>, Error> = controller.get_icons(unique_id, Duration::from_secs(5));
+```
+
+Retrieve structure with information stored about a switch, from the controller. This is the same structure returned earlier during Discovery:
+``` rust
+
+let result = controller.get_info(unique_id);
+```
+
+
 ## Compatibility
-Theoretically supports and device advertising the `urn:Belkin:service:basicevent:1` service. Does not support dimmers, motion sensors, yet.
+Theoretically supports and device advertising the `urn:Belkin:service:basicevent:1` service. Tested with Lightswitch and Socket.
 Currently only tested with Belkin WeMo LightSwitch and Socket.
 
 ## License
