@@ -51,7 +51,7 @@ rcedit target\release\examples\weeapp.exe --set-icon examples\images\icon.ico
 Create new instance of controller:
 ``` rust
 
-use weectrl::*;
+use weectrl::{DeviceInfo, DiscoveryMode, State, StateNotification, WeeController};
 
 let controller = WeeController::new();
 ```
@@ -62,7 +62,7 @@ To discover devices on network or/and in cache asynchronously:
 let rx: std::sync::mpsc::Receiver<DeviceInfo> = controller.discover(
     DiscoveryMode::CacheAndBroadcast, 
     true, 
-    Durations::from_secs(5), 
+    Duration::from_secs(5), 
     );
 ```
 Scans both disk cache file and network, will "forget" in-memory list first. Give network devices maximum 5 seconds to respond.
@@ -74,7 +74,7 @@ Futures version of the discover function.
 let notifications: futures::channel::mpsc::UnboundedReceiver<DeviceInfo> = controller.discover_future(
     DiscoveryMode::CacheAndBroadcast, 
     true, 
-    Durations::from_secs(5), 
+    Duration::from_secs(5), 
     );
 ```
 
