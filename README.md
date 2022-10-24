@@ -62,7 +62,7 @@ To discover devices on network or/and in cache asynchronously:
 let rx: std::sync::mpsc::Receiver<DeviceInfo> = controller.discover(
     DiscoveryMode::CacheAndBroadcast, 
     true, 
-    5, 
+    Durations::from_secs(5), 
     );
 ```
 Scans both disk cache file and network, will "forget" in-memory list first. Give network devices maximum 5 seconds to respond.
@@ -74,7 +74,7 @@ Futures version of the discover function.
 let notifications: futures::channel::mpsc::UnboundedReceiver<DeviceInfo> = controller.discover_future(
     DiscoveryMode::CacheAndBroadcast, 
     true, 
-    5, 
+    Durations::from_secs(5), 
     );
 ```
 
