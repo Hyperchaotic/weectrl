@@ -33,7 +33,6 @@ enum Message {
     AddButton(DeviceInfo),
     Notification(StateNotification),
     Clicked(DeviceInfo),
-    ScaleApp,
 }
 
 struct WeeApp {
@@ -47,7 +46,6 @@ struct WeeApp {
     controller: WeeController,
     discovering: bool,                        // Is discover currently in progress?
     buttons: HashMap<String, button::Button>, // List of deviceID's and indexes of the associated buttons
-    scaling: menu::Choice,
 }
 
 const SETTINGS_FILE: &str = "Settings.json";
@@ -145,19 +143,12 @@ impl WeeApp {
         // Set app size/position to saved values, or use defaults
         // If no position is set the OS decides.
         let settings = storage.read();
-        let scale: DisplayScale;
         if let Some(settings) = settings {
             main_win.set_size(settings.w, settings.h);
             main_win.set_pos(settings.x, settings.y);
 
-            scale = settings.scaling;
-            let screens = app::Screen::all_screens();
-            for &s in &screens {
-                s.set_scale(scale.into());
-            }
         } else {
             main_win.set_size(WINDOW_WIDTH, WINDOW_HEIGHT);
-            scale = DisplayScale::default();
         }
 
         main_win.set_color(Color::Gray0);
@@ -275,27 +266,11 @@ impl WeeApp {
 
         main_win.add(&progress_frame);
 
-        let mut choice = menu::Choice::default().with_size(50, 15);
-        choice.add_choice("100%");
-        choice.add_choice("90%");
-        choice.add_choice("80%");
-        choice.set_pos(main_win.w() - 60, main_win.h() - UNIT_SPACING + 14);
-        choice.set_text_size(14);
-        choice.set_tooltip("Display scaling");
-        choice.hide();
-
-        choice.set_value(scale.into());
-
-        main_win.add(&choice);
-
-        choice.emit(sender.clone(), Message::ScaleApp);
-
         let mut sc = scroll.clone();
         let mut pa = pack.clone();
         let mut reload = btn_reload.clone();
         let mut clear = btn_clear.clone();
         let mut rlfr = reloading_frame.clone();
-        let mut ch = choice.clone();
         let mut prfr = progress_frame.clone();
         let controller = WeeController::new();
 
@@ -307,7 +282,6 @@ impl WeeApp {
                     y: w.y(),
                     w: w.w(),
                     h: w.h(),
-                    scaling: DisplayScale::from(ch.value()),
                 };
                 let storage = Storage::new();
                 storage.write(settings);
@@ -316,14 +290,6 @@ impl WeeApp {
 
             Event::Show => {
                 info!("Event::Show");
-                let scaling = DisplayScale::from(ch.value());
-                info!("choice: {:?}", scaling);
-
-                let screens = app::Screen::all_screens();
-
-                for &s in &screens {
-                    info!("screen size {}", s.scale());
-                }
 
                 //Sometimes the buttons would mysteriously be double height
                 //Trying this hack to mitigate
@@ -338,14 +304,6 @@ impl WeeApp {
             // When resizing the App window, reposition internal elements accordingly
             Event::Resize => {
                 info!("Event::Resize");
-                let scaling: DisplayScale = ch.value().into();
-                info!("choice: {:?}", scaling);
-
-                let screens = app::Screen::all_screens();
-
-                for &s in &screens {
-                    info!("screen size {}", s.scale());
-                }
 
                 sc.resize(
                     UNIT_SPACING,
@@ -364,9 +322,6 @@ impl WeeApp {
 
                 rlfr.set_size(90, UNIT_SPACING);
                 rlfr.set_pos(UNIT_SPACING, w.h() - UNIT_SPACING);
-
-                ch.set_size(50, 15);
-                ch.set_pos(w.w() - 60, w.h() - UNIT_SPACING + 14);
 
                 prfr.set_size(16, 16);
                 prfr.set_pos(90 + UNIT_SPACING + 5, w.h() - 27);
@@ -413,7 +368,6 @@ impl WeeApp {
             controller,
             discovering: true,
             buttons: HashMap::new(),
-            scaling: choice,
         }
     }
 
@@ -519,20 +473,6 @@ impl WeeApp {
         while self.app.wait() {
             if let Some(msg) = self.receiver.recv() {
                 match msg {
-                    Message::ScaleApp => {
-                        let scale = DisplayScale::from(self.scaling.value());
-                        info!(
-                            "Message::ScaleApp. choice size {}/{:?}",
-                            self.scaling.value(),
-                            scale
-                        );
-                        let screens = app::Screen::all_screens();
-
-                        for &s in &screens {
-                            info!("screen size {}", s.scale());
-                            s.set_scale(scale.into());
-                        }
-                    }
                     // Clear button pressed, forget all switches and clear the UI
                     Message::Clear => {
                         if !self.discovering {
@@ -548,7 +488,6 @@ impl WeeApp {
                     Message::Reload => {
                         if !self.discovering {
                             info!("Message::Reload");
-                            self.scaling.hide();
                             self.controller.clear(false);
                             self.buttons.clear();
                             self.pack.clear();
@@ -709,7 +648,6 @@ impl WeeApp {
                     Message::EndDiscovery => {
                         info!("Message::EndDiscovery");
                         self.discovering = false;
-                        self.scaling.show();
                         self.progress_frame.hide();
                         self.reloading_frame.hide();
                     }
@@ -730,48 +668,6 @@ impl WeeApp {
                     }
                 }
             }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-struct DisplayScale {
-    value: f32,
-}
-
-// Struct to encapsulate the screen scaling and convert between
-// the three sizes 1.0, 0.9 and 0.8 and the corresponding indexes
-// in the Choice dialog 0, 1, 2
-impl DisplayScale {
-    fn default() -> Self {
-        DisplayScale { value: 1.0 }
-    }
-}
-
-impl From<DisplayScale> for f32 {
-    fn from(item: DisplayScale) -> Self {
-        item.value
-    }
-}
-
-impl From<DisplayScale> for i32 {
-    fn from(item: DisplayScale) -> Self {
-        if item.value == 0.9 {
-            1
-        } else if item.value == 0.8 {
-            2
-        } else {
-            0
-        }
-    }
-}
-
-impl From<i32> for DisplayScale {
-    fn from(item: i32) -> Self {
-        match item {
-            1 => DisplayScale { value: 0.9 },
-            2 => DisplayScale { value: 0.8 },
-            _ => DisplayScale { value: 1.0 },
         }
     }
 }
@@ -822,7 +718,6 @@ pub struct Settings {
     y: i32,
     w: i32,
     h: i32,
-    scaling: DisplayScale,
 }
 
 pub struct Storage {
