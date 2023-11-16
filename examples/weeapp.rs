@@ -233,7 +233,7 @@ impl WeeApp {
         scroll.set_frame(enums::FrameType::BorderBox);
         scroll.set_type(group::ScrollType::VerticalAlways);
         scroll.make_resizable(false);
-        scroll.set_color(Color::BackGround | Color::from_hex(0x2e3436));
+        scroll.set_color(Color::from_hex(0x2e3436));
         scroll.set_scrollbar_size(SCROLL_WIDTH);
 
         let mut pack = group::Pack::default()
@@ -242,7 +242,7 @@ impl WeeApp {
 
         pack.set_type(group::PackType::Vertical);
         pack.set_spacing(2);
-        pack.set_color(Color::BackGround | Color::Red);
+        pack.set_color(Color::Red);
 
         pack.end();
 
@@ -393,7 +393,7 @@ impl WeeApp {
 
         pack.set_type(group::PackType::Vertical);
         pack.set_spacing(2);
-        pack.set_color(Color::BackGround | Color::Red);
+        pack.set_color(Color::Red);
         pack.set_spacing(5);
 
         pack.end();
@@ -444,7 +444,7 @@ impl WeeApp {
         scroll.set_frame(enums::FrameType::BorderBox);
         scroll.set_type(group::ScrollType::BothAlways);
         scroll.make_resizable(false);
-        scroll.set_color(Color::BackGround | Color::from_hex(0x2e3436));
+        scroll.set_color(Color::from_hex(0x2e3436));
         scroll.set_scrollbar_size(SCROLL_WIDTH);
 
         let mut name = output::MultilineOutput::new(10, 35, grp2.w() + 100, grp2.h() * 5, "");

@@ -1,6 +1,6 @@
 [package]
 name = "weectrl"
-version = "2.0.1"
+version = "2.0.2"
 authors = ["Klaus Nielsen <hyperchaotic@gmail.com>"]
 license = "MIT/Apache-2.0"
 readme = "README.md"
@@ -15,17 +15,17 @@ edition = "2021"
 [dependencies]
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["local-time"] }
-directories = "4"
+directories = "5"
 futures = "0.3"
 mime = "0.3.16"
-serde-xml-rs = "0.5.1"
+serde-xml-rs = "0.6"
 serde_json = "1.0"
 serde_derive = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 url = "2"
 reqwest = { version = "0.11", features = ["blocking"] }
 hyper = { version = "0.14", features = ["full"] }
-tokio = { version = "1.21", features = ["full"] }
+tokio = { version = "1", features = ["full"] }
 
 [profile.release]
 strip = true
@@ -37,7 +37,7 @@ panic = "abort"
 [dev-dependencies] 
 advmac = "1"
 fltk = "1"
-fltk-theme = "0.4"
+fltk-theme = "0.7"
 
 [lib]
 name = "weectrl"
