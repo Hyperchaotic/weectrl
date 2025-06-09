@@ -36,7 +36,7 @@ panic = "abort"
 
 [dev-dependencies] 
 advmac = "1"
-fltk = "1"
+fltk = "^1.5"
 fltk-theme = "0.7"
 
 [lib]

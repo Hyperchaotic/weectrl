@@ -7,10 +7,9 @@ use tracing::info;
 use std::sync::mpsc;
 use std::time::Duration;
 
-pub use reqwest::{Method, Request, Response, StatusCode};
+pub use reqwest::{Method, StatusCode};
 
 pub use crate::error::Error;
-pub use reqwest::Error as HttpError;
 
 use url::Url;
 
